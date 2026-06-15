@@ -103,9 +103,9 @@ const ProductionPlanPage = ()=>{
 
       {/* Date navigation */}
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
-        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d-1)}>\u25c0</Btn>
+        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d-1)}>{"\u25c0"}</Btn>
         <span style={{fontSize:14,fontWeight:600,color:C.text,minWidth:180,textAlign:"center"}}>{navLabel}</span>
-        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d+1)}>\u25b6</Btn>
+        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d+1)}>{"\u25b6"}</Btn>
         <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(0)}>Сегодня</Btn>
       </div>
 
