@@ -1267,34 +1267,33 @@ async function bootstrapState() {
   ]);
 
   const ALL_CAMERAS = [
-    { id:1, name:"Цех — линия 1",           zone:"Цех",    type:"demo",   url:"",                                                   enabled:true, description:"Производственная линия №1",  refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:2, name:"Склад готовой продукции",  zone:"Склад",  type:"demo",   url:"",                                                   enabled:true, description:"Зона хранения",              refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:3, name:"Вход в здание",            zone:"Вход",   type:"demo",   url:"",                                                   enabled:true, description:"Главный вход",               refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:4, name:"Офис менеджера",           zone:"Офис",   type:"demo",   url:"",                                                   enabled:true, description:"Рабочее место менеджера",    refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:5, name:"Говорит Москва",   zone:"Улица",  type:"iframe", url:"https://video.govoritmoskva.ru/rufm/embed.html?autoplay=true",                                          enabled:true, description:"Веб-камера студии Говорит Москва",   refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:6, name:"Грозный Сити",    zone:"Улица",  type:"hls",    url:"https://camera.vt.ru:8888/cam1/index.m3u8",                                                              enabled:true, description:"HLS-камера Вайнах Телеком — Грозный", refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:7, name:"Мансур (медведь)",zone:"Улица",  type:"iframe", url:"https://vkvideo.ru/video_ext.php?oid=-135955999&id=456239536&hd=1&autoplay=1",                            enabled:true, description:"Трансляция медведя Мансур — ВКонтакте", refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:8, name:"Плаза СПА",       zone:"Улица",  type:"iframe", url:"https://open.ivideon.com/embed/v3/?server=100-PMOSoaWrNLw3bnCEKwk7RX&camera=0&width=&height=&lang=ru",  enabled:true, description:"Камера Плаза СПА — ivideon",           refreshSec:5, createdAt:"2024-01-01T00:00:00" },
-    { id:9, name:"Медный всадник",  zone:"Улица",  type:"iframe", url:"https://rutube.ru/play/embed/92e79cc0d122fb94647b79d4e7778773/?skinColor=cc0000",                        enabled:true, description:"Веб-камера Медный всадник — Rutube",   refreshSec:5, createdAt:"2024-01-01T00:00:00" },
+    { id:5, name:"Говорит Москва",   zone:"Улица",  type:"iframe", url:"https://video.govoritmoskva.ru/rufm/embed.html?autoplay=true",                                         enabled:true, description:"Веб-камера студии Говорит Москва",    refreshSec:5, createdAt:"2024-01-01T00:00:00" },
+    { id:6, name:"Грозный Сити",     zone:"Улица",  type:"hls",    url:"https://camera.vt.ru:8888/cam1/index.m3u8",                                                             enabled:true, description:"HLS-камера Вайнах Телеком — Грозный", refreshSec:5, createdAt:"2024-01-01T00:00:00" },
+    { id:7, name:"Мансур (медведь)", zone:"Улица",  type:"iframe", url:"https://vkvideo.ru/video_ext.php?oid=-135955999&id=456239536&hd=1&autoplay=1",                          enabled:true, description:"Трансляция медведя Мансур — ВКонтакте", refreshSec:5, createdAt:"2024-01-01T00:00:00" },
+    { id:8, name:"Плаза СПА",        zone:"Улица",  type:"iframe", url:"https://open.ivideon.com/embed/v3/?server=100-PMOSoaWrNLw3bnCEKwk7RX&camera=0&width=&height=&lang=ru", enabled:true, description:"Камера Плаза СПА — ivideon",           refreshSec:5, createdAt:"2024-01-01T00:00:00" },
   ];
   await seedIfMissing("dk_cameras", ALL_CAMERAS);
-  // Migration: add new cameras + update URL/type for seeded cameras that changed
+  // Migration: replace camera list with exactly ALL_CAMERAS (removes old demo/deleted entries)
   const existingCameras = await readState("dk_cameras");
   if (existingCameras) {
     const seedMap = new Map(ALL_CAMERAS.map(c => [c.id, c]));
-    const updated = existingCameras.map(c => {
-      const seed = seedMap.get(c.id);
-      if (seed && (c.url !== seed.url || c.type !== seed.type)) {
-        return { ...c, url: seed.url, type: seed.type, description: seed.description };
-      }
-      return c;
-    });
-    const existingIds = new Set(existingCameras.map(c => c.id));
-    const missing = ALL_CAMERAS.filter(c => !existingIds.has(c.id));
-    const changed = JSON.stringify(updated) !== JSON.stringify(existingCameras);
-    if (changed || missing.length > 0) {
-      await writeState("dk_cameras", [...updated, ...missing]);
-      console.log(`[bootstrap] Cameras: +${missing.length} new, ${changed ? "URLs updated" : "no URL changes"}`);
+    const allowedIds = new Set(ALL_CAMERAS.map(c => c.id));
+    // Keep only cameras that are in the seed; update url/type/description if changed
+    const kept = existingCameras
+      .filter(c => allowedIds.has(c.id))
+      .map(c => {
+        const seed = seedMap.get(c.id);
+        if (c.url !== seed.url || c.type !== seed.type) {
+          return { ...c, url: seed.url, type: seed.type, description: seed.description };
+        }
+        return c;
+      });
+    const keptIds = new Set(kept.map(c => c.id));
+    const missing = ALL_CAMERAS.filter(c => !keptIds.has(c.id));
+    const final = [...kept, ...missing];
+    if (JSON.stringify(final) !== JSON.stringify(existingCameras)) {
+      await writeState("dk_cameras", final);
+      console.log(`[bootstrap] Cameras synced: ${final.length} active`);
     }
   }
 
