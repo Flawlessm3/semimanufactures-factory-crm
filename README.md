@@ -99,25 +99,36 @@
 
 Требования: [Node.js 20+](https://nodejs.org/) и [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 
-### 1. Установить зависимости
+### Быстрый старт
+
+```bash
+make setup   # env + npm install + запуск PostgreSQL
+make dev     # Vite + API сервер вместе
+```
+
+Откроется на [http://127.0.0.1:5173](http://127.0.0.1:5173)
+
+При первом запуске база данных заполняется демо-данными автоматически.
+
+---
+
+### Вручную (без make)
+
+#### 1. Установить зависимости
 
 ```bash
 npm install
 ```
 
-### 2. Создать файл `.env`
+#### 2. Создать файл `.env`
 
-Скопируй и создай файл `.env` в корне проекта:
-
-```env
-DATABASE_URL=postgresql://dikanish:dikanish@localhost:5433/dikanish
-JWT_ACCESS_SECRET=dikanish-access-secret-change-in-prod
-JWT_REFRESH_SECRET=dikanish-refresh-secret-change-in-prod
-HOST=127.0.0.1
-PORT=3000
+```bash
+cp .env.example .env
 ```
 
-### 3. Запустить PostgreSQL
+Заполни `.env` своими значениями (шаблон в `.env.example`).
+
+#### 3. Запустить PostgreSQL
 
 ```bash
 docker compose up db -d
@@ -125,15 +136,30 @@ docker compose up db -d
 
 Контейнер остаётся в фоне. После перезагрузки компьютера нужно запустить снова.
 
-### 4. Запустить проект
+#### 4. Запустить проект
 
 ```bash
 npm run dev
 ```
 
-Откроется на [http://127.0.0.1:5173](http://127.0.0.1:5173)
+---
 
-При первом запуске база данных заполняется демо-данными автоматически.
+### Все команды make
+
+```
+make env          — создать .env из .env.example
+make install      — npm install
+make setup        — env + install + запуск БД (первый раз)
+make dev          — запустить локально (Vite + API)
+make build        — собрать production-билд
+make db           — запустить PostgreSQL (Docker, фон)
+make db-stop      — остановить PostgreSQL
+make db-shell     — psql внутри контейнера
+make docker-up    — поднять весь стек через Docker
+make docker-down  — остановить Docker-стек
+make logs         — логи app-контейнера
+make clean        — удалить dist/ и node_modules/
+```
 
 ---
 
