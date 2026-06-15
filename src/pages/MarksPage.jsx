@@ -1,142 +1,203 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ROLES, MARK_TYPES, fmtDate, fmtShort } from "../constants";
-import { Badge, Btn, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card, PageH, SearchBox } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function MarksPage(){
-  const {marks,setMarks,users,tasks,products,currentUser,addLog}=useContext(AppContext);
+// MARKS PAGE
+const MarksPage = ()=>{
+  const {marks,setMarks,users,productionOutputs,currentUser,addLog,applyServerState}=useContext(AppContext);
   const [modal,setModal]=useState(false);
-  const [edit,setEdit]=useState(null);
   const [confirm,setConfirm]=useState(null);
   const [toast,setToast]=useState(null);
   const [search,setSearch]=useState("");
+  const [fDate,setFDate]=useState(()=>new Date().toISOString().slice(0,10));
   const [fType,setFType]=useState("all");
   const [fEmployee,setFEmployee]=useState("all");
   const [errs,setErrs]=useState({});
   const role=ROLES.find(r=>r.id===currentUser.roleId);
-  const isAdmin=role?.name==="admin";
+  const isAdmin=role?.name==="admin"||role?.name==="owner";
   const isManager=role?.name==="manager";
   const isWorker=role?.name==="worker";
-  const canCreate=isAdmin||isManager;
-  const canEditDel=isAdmin;
+  const canManage=isAdmin||isManager;
 
-  const workers=users.filter(u=>u.roleId===3);
-  const completedTasks=tasks.filter(t=>t.status==="завершено"||t.status==="просрочено");
-  const empty={employeeId:workers[0]?.id||"",markType:"присутствие",relatedTaskId:"",comment:""};
-  const [form,setForm]=useState(empty);
+  const workers=users.filter(u=>u.status==="active");
+  const todayStr=new Date().toISOString().slice(0,10);
 
-  const visible=useMemo(()=>{
-    let list=isWorker?marks.filter(m=>m.employeeId===currentUser.id):[...marks];
-    if(search){const s=search.toLowerCase();list=list.filter(m=>{const emp=users.find(u=>u.id===m.employeeId);return emp?.name.toLowerCase().includes(s)||m.comment?.toLowerCase().includes(s)})}
-    if(fType!=="all")list=list.filter(m=>m.markType===fType);
-    if(fEmployee!=="all")list=list.filter(m=>m.employeeId===+fEmployee);
-    return list.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  },[marks,search,fType,fEmployee,isWorker,currentUser]);
+  const emptyForm={employeeId:isWorker?currentUser.id:(workers[0]?.id||""),type:"приход",time:new Date().toISOString().slice(0,16),reason:"",comment:""};
+  const [form,setForm]=useState(emptyForm);
 
-  const openNew=()=>{setEdit(null);setForm(empty);setErrs({});setModal(true)};
-  const openEdit=m=>{setEdit(m);setForm({employeeId:m.employeeId,markType:m.markType,relatedTaskId:m.relatedTaskId||"",comment:m.comment||""});setErrs({});setModal(true)};
-  const validate=()=>{const e={};if(!form.employeeId)e.employeeId="!";setErrs(e);return!Object.keys(e).length};
+  // Records for selected date
+  const dateMarks=useMemo(()=>{
+    let l=isWorker?marks.filter(m=>m.employeeId===currentUser.id):marks;
+    l=l.filter(m=>(m.time||m.createdAt||"").slice(0,10)===fDate);
+    if(fType!=="all") l=l.filter(m=>m.type===fType||m.markType===fType);
+    if(search){const s=search.toLowerCase();l=l.filter(m=>{const emp=users.find(u=>u.id===m.employeeId);return emp?.name.toLowerCase().includes(s)||m.comment?.toLowerCase().includes(s)});}
+    return l.sort((a,b)=>new Date(a.time||a.createdAt)-new Date(b.time||b.createdAt));
+  },[marks,fDate,fType,search,isWorker,currentUser]);
 
-  const save=()=>{
-    if(!validate())return;
-    const empName=users.find(u=>u.id===+form.employeeId)?.name?.split(" ").slice(0,2).join(" ");
-    if(edit){
-      setMarks(p=>p.map(m=>m.id===edit.id?{...m,employeeId:+form.employeeId,markType:form.markType,relatedTaskId:form.relatedTaskId?+form.relatedTaskId:null,comment:form.comment}:m));
-      addLog(`Отметка обновлена: ${empName}`);
-      setToast({message:"Обновлено",type:"success"});
-    }else{
-      setMarks(p=>[...p,{id:Date.now(),employeeId:+form.employeeId,markType:form.markType,relatedTaskId:form.relatedTaskId?+form.relatedTaskId:null,createdBy:currentUser.id,createdAt:new Date().toISOString(),comment:form.comment}]);
-      addLog(`Отметка: ${form.markType} — ${empName}`);
-      setToast({message:"Отметка создана",type:"success"});
+  // Today's attendance status per worker
+  const todayByWorker=useMemo(()=>{
+    const today=marks.filter(m=>(m.time||m.createdAt||"").slice(0,10)===todayStr);
+    const byW={};
+    workers.forEach(w=>{
+      const wm=today.filter(m=>m.employeeId===w.id);
+      const arrived=wm.find(m=>m.type==="приход"||m.markType==="присутствие");
+      const left=wm.find(m=>m.type==="уход");
+      const late=wm.find(m=>m.type==="опоздание");
+      const absent=wm.find(m=>m.type==="отсутствие");
+      byW[w.id]={arrived,left,late,absent,produced:(productionOutputs||[]).filter(o=>o.employeeId===w.id&&(o.date||"").slice(0,10)===todayStr).reduce((s,o)=>s+o.quantity,0)};
+    });
+    return byW;
+  },[marks,workers,todayStr,productionOutputs]);
+
+  const postAttendance=async(employeeId,type,extra={})=>{
+    try{
+      const r=await fetch("/api/actions/attendance-mark",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({employeeId,type,...extra}),
+      });
+      if(!r.ok){
+        const err=await r.json().catch(()=>({}));
+        setToast({message:err.error||"Не удалось отметить",type:"error"});
+        return false;
+      }
+      const data=await r.json();
+      if(data.state)applyServerState(data.state);
+      return true;
+    }catch(e){
+      setToast({message:"Нет связи с сервером",type:"error"});
+      return false;
     }
-    setModal(false);
   };
 
-  const del=m=>{const empName=users.find(u=>u.id===m.employeeId)?.name?.split(" ").slice(0,2).join(" ");setConfirm({title:"Удалить отметку?",message:`Удалить отметку для ${empName}?`,onConfirm:()=>{setMarks(p=>p.filter(x=>x.id!==m.id));addLog(`Удалена отметка: ${empName}`);setToast({message:"Удалено",type:"error"});setConfirm(null)}})};
-
-  const mtColor=t=>t==="присутствие"?"success":"info";
-  const mtIcon=t=>t==="присутствие"?<I.user size={14}/>:<I.check size={14}/>;
-
-  const todayPresent=marks.filter(m=>m.markType==="присутствие"&&fmtShort(m.createdAt)===fmtShort(new Date().toISOString())).map(m=>m.employeeId);
-  const markPresence=(wId)=>{
-    if(todayPresent.includes(wId)) return;
-    setMarks(p=>[...p,{id:Date.now(),employeeId:wId,markType:"присутствие",relatedTaskId:null,createdBy:currentUser.id,createdAt:new Date().toISOString(),comment:""}]);
-    const empName=users.find(u=>u.id===wId)?.name?.split(" ").slice(0,2).join(" ");
-    addLog(`Присутствие: ${empName}`);
-    setToast({message:`${empName} — отмечен`,type:"success"});
+  const markSelf=async(type)=>{
+    if(await postAttendance(currentUser.id,type)){
+      setToast({message:`${type} отмечен`,type:"success"});
+    }
   };
+
+  const quickMark=async(wId,type)=>{
+    const empName=users.find(u=>u.id===wId)?.name?.split(" ")[0]||"";
+    if(await postAttendance(wId,type)){
+      setToast({message:`${empName} — ${type}`,type:"success"});
+    }
+  };
+
+  const saveModal=()=>{
+    const e={};if(!form.employeeId)e.employeeId="!";if(!form.type)e.type="!";
+    setErrs(e);if(Object.keys(e).length)return;
+    const now=new Date().toISOString();
+    setMarks(p=>[...p,{id:Date.now(),employeeId:+form.employeeId,type:form.type,time:form.time?new Date(form.time).toISOString():now,reason:form.reason,comment:form.comment,createdBy:currentUser.id,createdAt:now}]);
+    const empName=users.find(u=>u.id===+form.employeeId)?.name?.split(" ")[0]||"";
+    addLog(`${form.type}: ${empName} (${form.comment||"—"})`);
+    setToast({message:"Отметка добавлена",type:"success"});setModal(false);
+  };
+
+  const delMark=m=>{setConfirm({title:"Удалить отметку?",message:"Это действие нельзя отменить",onConfirm:()=>{setMarks(p=>p.filter(x=>x.id!==m.id));setToast({message:"Удалено",type:"error"});setConfirm(null)}})};
 
   return(
     <div>
-      <PageH title="Отметки сотрудников">
-        <SearchBox value={search} onChange={e=>setSearch(e.target.value)}/>
-        <select value={fType} onChange={e=>setFType(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}><option value="all">Все типы</option>{MARK_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
-        {!isWorker&&<select value={fEmployee} onChange={e=>setFEmployee(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}><option value="all">Все сотрудники</option>{workers.map(w=><option key={w.id} value={w.id}>{w.name.split(" ").slice(0,2).join(" ")}</option>)}</select>}
-        {canCreate&&<Btn onClick={openNew} icon={<I.plus size={15}/>}>Новая отметка</Btn>}
+      <PageH title="Посещаемость / Смена">
+        <input type="date" value={fDate} onChange={e=>setFDate(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}/>
+        <select value={fType} onChange={e=>setFType(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}>
+          <option value="all">Все типы</option>
+          {ATTENDANCE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+        {canManage&&<Btn onClick={()=>{setForm(emptyForm);setErrs({});setModal(true)}} icon={<I.plus size={15}/>}>Добавить</Btn>}
       </PageH>
 
-      {canCreate&&(
-        <Card s={{marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-            <I.user size={16}/>
-            <span style={{fontSize:14,fontWeight:700,color:C.text}}>Присутствие сегодня</span>
-            <span style={{fontSize:12,color:C.dim}}>{fmtShort(new Date().toISOString())}</span>
+      {/* Worker self-service */}
+      {isWorker&&fDate===todayStr&&(
+        <Card s={{marginBottom:16,padding:"14px 16px"}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:12}}>Моя смена сегодня</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {!todayByWorker[currentUser.id]?.arrived&&!todayByWorker[currentUser.id]?.absent&&(
+              <button onClick={()=>markSelf("приход")} style={{padding:"10px 20px",borderRadius:8,border:`1px solid ${C.success}40`,background:`${C.success}15`,color:C.success,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✅ Отметить приход</button>
+            )}
+            {todayByWorker[currentUser.id]?.arrived&&!todayByWorker[currentUser.id]?.left&&(
+              <button onClick={()=>markSelf("уход")} style={{padding:"10px 20px",borderRadius:8,border:`1px solid ${C.info}40`,background:`${C.info}15`,color:C.info,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>🚪 Отметить уход</button>
+            )}
+            {todayByWorker[currentUser.id]?.arrived&&<div style={{padding:"10px 14px",borderRadius:8,background:`${C.success}10`,border:`1px solid ${C.success}30`,fontSize:12,color:C.success}}>✓ Пришёл в {fmtTime(todayByWorker[currentUser.id].arrived.time)}</div>}
+            {todayByWorker[currentUser.id]?.left&&<div style={{padding:"10px 14px",borderRadius:8,background:`${C.info}10`,border:`1px solid ${C.info}30`,fontSize:12,color:C.info}}>🚪 Ушёл в {fmtTime(todayByWorker[currentUser.id].left.time)}</div>}
           </div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+        </Card>
+      )}
+
+      {/* Manager today overview */}
+      {canManage&&fDate===todayStr&&(
+        <Card s={{marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:12}}>Сводка на сегодня — {fmtShort(todayStr)}</div>
+          <div style={{display:"grid",gap:6}}>
             {workers.map(w=>{
-              const present=todayPresent.includes(w.id);
+              const ws=todayByWorker[w.id]||{};
+              const status=ws.absent?"отсутствует":ws.arrived?ws.left?"завершил смену":"на смене":"не отмечен";
+              const statusColor=ws.absent?C.danger:ws.arrived?ws.left?C.info:C.success:C.dim;
               return(
-                <button key={w.id} onClick={()=>markPresence(w.id)} disabled={present} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:8,border:`1px solid ${present?C.success+"40":C.border}`,background:present?C.successBg:C.surface2,color:present?C.success:C.text,cursor:present?"default":"pointer",fontFamily:"inherit",fontSize:13,fontWeight:500,opacity:present?.8:1,transition:"all .15s"}}>
-                  {present?<I.check size={14}/>:<I.user size={14}/>}
-                  {w.name.split(" ").slice(0,2).join(" ")}
-                  {present&&<span style={{fontSize:10,marginLeft:2}}>✓</span>}
-                </button>
+                <div key={w.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 10px",borderRadius:8,background:C.surface2,border:`1px solid ${C.border}`}}>
+                  <div style={{width:32,height:32,borderRadius:8,background:`${statusColor}20`,color:statusColor,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:14,flexShrink:0}}>{w.name.charAt(0)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{w.name.split(" ").slice(0,2).join(" ")}</div>
+                    <div style={{fontSize:11,color:C.dim}}>{w.jobTitle||ROLES.find(r=>r.id===w.roleId)?.label}</div>
+                  </div>
+                  <div style={{fontSize:12,color:statusColor,fontWeight:600,minWidth:90,textAlign:"right"}}>{status}</div>
+                  {ws.arrived&&<div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>↑{fmtTime(ws.arrived.time)}{ws.left?` ↓${fmtTime(ws.left.time)}`:""}</div>}
+                  {ws.produced>0&&<Badge color="success" s={{fontSize:10}}>{ws.produced} ед.</Badge>}
+                  {!ws.arrived&&!ws.absent&&(
+                    <div style={{display:"flex",gap:4}}>
+                      <button onClick={()=>quickMark(w.id,"приход")} style={{fontSize:11,padding:"3px 8px",borderRadius:5,border:`1px solid ${C.success}40`,background:`${C.success}10`,color:C.success,cursor:"pointer",fontFamily:"inherit"}}>↑Пришёл</button>
+                      <button onClick={()=>quickMark(w.id,"отсутствие")} style={{fontSize:11,padding:"3px 8px",borderRadius:5,border:`1px solid ${C.danger}40`,background:`${C.danger}10`,color:C.danger,cursor:"pointer",fontFamily:"inherit"}}>Нет</button>
+                    </div>
+                  )}
+                  {ws.arrived&&!ws.left&&<button onClick={()=>quickMark(w.id,"уход")} style={{fontSize:11,padding:"3px 8px",borderRadius:5,border:`1px solid ${C.info}40`,background:`${C.info}10`,color:C.info,cursor:"pointer",fontFamily:"inherit"}}>↓Ушёл</button>}
+                </div>
               );
             })}
           </div>
         </Card>
       )}
 
+      {/* Records table */}
       <Card s={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>
-          <TH>Дата/Время</TH><TH>Сотрудник</TH><TH>Тип</TH><TH>Заказ</TH><TH>Автор</TH><TH>Комментарий</TH>{canEditDel&&<TH></TH>}
-        </tr></thead>
-          <tbody>{visible.map(m=>{
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr><TH>Время</TH><TH>Сотрудник</TH><TH>Событие</TH><TH>Причина</TH><TH>Комментарий</TH>{canManage&&<TH></TH>}</tr></thead>
+          <tbody>{dateMarks.map(m=>{
             const emp=users.find(u=>u.id===m.employeeId);
-            const author=users.find(u=>u.id===m.createdBy);
-            const task=m.relatedTaskId?tasks.find(t=>t.id===m.relatedTaskId):null;
-            const prod=task?products.find(p=>p.id===task.productId):null;
+            const type=m.type||m.markType||"—";
+            const typeClr=ATTENDANCE_TYPE_COLORS[type]||"info";
             return(
               <tr key={m.id} style={{borderBottom:`1px solid ${C.border}`}}>
-                <TD s={{fontSize:12,whiteSpace:"nowrap"}}>{fmtDate(m.createdAt)}</TD>
+                <TD s={{fontSize:12,whiteSpace:"nowrap",color:C.muted}}>{fmtTime(m.time||m.createdAt)}</TD>
                 <TD s={{fontWeight:500}}>{emp?.name?.split(" ").slice(0,2).join(" ")||"—"}</TD>
-                <TD><Badge color={mtColor(m.markType)}>{mtIcon(m.markType)} <span style={{marginLeft:4}}>{m.markType}</span></Badge></TD>
-                <TD s={{color:C.muted,fontSize:12}}>{task?`#${task.id} ${prod?.name||""} x${task.quantity}`:"—"}</TD>
-                <TD s={{color:C.dim,fontSize:12}}>{author?.name?.split(" ").slice(0,2).join(" ")||"—"}</TD>
-                <TD s={{color:C.muted,fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.comment||"—"}</TD>
-                {canEditDel&&<TD><div style={{display:"flex",gap:4}}>
-                  <Btn v="ghost" sz="sm" onClick={()=>openEdit(m)} icon={<I.edit size={13}/>}/>
-                  <Btn v="ghost" sz="sm" onClick={()=>del(m)} icon={<I.trash size={13}/>}/>
-                </div></TD>}
+                <TD><Badge color={typeClr}>{type}</Badge></TD>
+                <TD s={{fontSize:12,color:C.muted}}>{m.reason||"—"}</TD>
+                <TD s={{fontSize:12,color:C.dim,maxWidth:180}}>{m.comment||"—"}</TD>
+                {canManage&&<TD><Btn v="ghost" sz="sm" onClick={()=>delMark(m)} icon={<I.trash size={13}/>}/></TD>}
               </tr>
             );
-          })}</tbody>
-        </table></div></Card>
-      {visible.length===0&&<div style={{textAlign:"center",padding:50,color:C.dim}}><I.clip size={36}/><p style={{marginTop:10}}>Нет отметок</p></div>}
+          })}
+          {dateMarks.length===0&&<tr><td colSpan={6} style={{textAlign:"center",padding:40,color:C.dim,fontSize:13}}>Нет отметок за {fmtShort(fDate)}</td></tr>}
+          </tbody>
+        </table>
+      </div></Card>
 
-      <Modal open={modal} onClose={()=>setModal(false)} title={edit?"Редактировать отметку":"Новая отметка"}>
-        <Sel label="Сотрудник" value={form.employeeId} onChange={e=>setForm({...form,employeeId:e.target.value})} error={errs.employeeId} options={[{value:"",label:"Выберите"},...workers.map(w=>({value:w.id,label:w.name}))]}/>
-        <Sel label="Тип отметки" value={form.markType} onChange={e=>setForm({...form,markType:e.target.value})} options={MARK_TYPES.map(t=>({value:t,label:t}))}/>
-        {form.markType==="выполненный заказ"&&(
-          <Sel label="Связанный заказ" value={form.relatedTaskId} onChange={e=>setForm({...form,relatedTaskId:e.target.value})} options={[{value:"",label:"Без привязки"},...completedTasks.filter(t=>(t.userIds||[]).includes(+form.employeeId)).map(t=>{const p=products.find(x=>x.id===t.productId);return{value:t.id,label:`#${t.id} ${p?.name||""} x${t.quantity}`}})]}/>
-        )}
+      <Modal open={modal} onClose={()=>setModal(false)} title="Добавить отметку" width={440}>
+        <Sel label="Сотрудник" value={form.employeeId} onChange={e=>setForm({...form,employeeId:e.target.value})} error={errs.employeeId} options={[{value:"",label:"Выберите"},...workers.map(w=>({value:w.id,label:w.name.split(" ").slice(0,2).join(" ")}))]}/>
+        <Sel label="Событие" value={form.type} onChange={e=>setForm({...form,type:e.target.value})} options={ATTENDANCE_TYPES.map(t=>({value:t,label:t}))}/>
+        <Inp label="Время (факт)" type="datetime-local" value={form.time} onChange={e=>setForm({...form,time:e.target.value})}/>
+        {(form.type==="опоздание"||form.type==="отсутствие")&&<Inp label="Причина" value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} placeholder="Болезнь, семейные обстоятельства..."/>}
         <Txa label="Комментарий" value={form.comment} onChange={e=>setForm({...form,comment:e.target.value})}/>
-        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:6}}><Btn v="secondary" onClick={()=>setModal(false)}>Отмена</Btn><Btn onClick={save}>{edit?"Сохранить":"Создать"}</Btn></div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:6}}><Btn v="secondary" onClick={()=>setModal(false)}>Отмена</Btn><Btn onClick={saveModal}>Добавить</Btn></div>
       </Modal>
       {confirm&&<Confirm open onClose={()=>setConfirm(null)} {...confirm}/>}
       {toast&&<Toast {...toast} onClose={()=>setToast(null)}/>}
     </div>
   );
-}
+};
+
+
+export { MarksPage };

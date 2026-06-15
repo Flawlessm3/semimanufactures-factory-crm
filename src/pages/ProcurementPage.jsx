@@ -1,10 +1,14 @@
-import { useContext, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { Badge, TH, TD, Card, Title, PageH, Stat } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ProcurementPage(){
+// PROCUREMENT (Auto-calculated purchase recommendations)
+const ProcurementPage = ()=>{
   const {productionPlans,products,rawMaterials,recipes}=useContext(AppContext);
 
   // Only future/active plans
@@ -81,8 +85,8 @@ export default function ProcurementPage(){
                 <TD><Badge color="purple">{p.category}</Badge></TD>
                 <TD s={{fontWeight:600}}>{p.needed} {p.unit}</TD>
                 <TD s={{color:p.shortage?C.danger:C.text}}>{p.available} {p.unit}</TD>
-                <TD s={{fontWeight:700,color:p.shortage?C.danger:C.success}}>{p.toOrder>0?p.toOrder:"✓"} {p.toOrder>0?p.unit:""}</TD>
-                <TD s={{color:C.muted}}>{p.estCost>0?`${p.estCost.toLocaleString("ru")}₽`:"—"}</TD>
+                <TD s={{fontWeight:700,color:p.shortage?C.danger:C.success}}>{p.toOrder>0?p.toOrder:"\u2713"} {p.toOrder>0?p.unit:""}</TD>
+                <TD s={{color:C.muted}}>{p.estCost>0?`${p.estCost.toLocaleString("ru")}₽`:"\u2014"}</TD>
               </tr>
             ))}</tbody>
           </table>
@@ -107,4 +111,7 @@ export default function ProcurementPage(){
       </Card>
     </div>
   );
-}
+};
+
+
+export { ProcurementPage };

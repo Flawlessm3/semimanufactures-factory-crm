@@ -1,11 +1,14 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { PLAN_STATUSES, fmtDate } from "../constants";
-import { Badge, Btn, Inp, Sel, Modal, Toast, TH, TD, Card, PageH } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ProductionPlanPage(){
+// PRODUCTION PLANNING
+const ProductionPlanPage = ()=>{
   const {productionPlans,setProductionPlans,products,users,rawMaterials,recipes,addLog,currentUser,addNotification}=useContext(AppContext);
   const [modal,setModal]=useState(false);
   const [toast,setToast]=useState(null);
@@ -100,9 +103,9 @@ export default function ProductionPlanPage(){
 
       {/* Date navigation */}
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
-        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d-1)}>◀</Btn>
+        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d-1)}>\u25c0</Btn>
         <span style={{fontSize:14,fontWeight:600,color:C.text,minWidth:180,textAlign:"center"}}>{navLabel}</span>
-        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d+1)}>▶</Btn>
+        <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(d=>d+1)}>\u25b6</Btn>
         <Btn v="ghost" sz="sm" onClick={()=>setDateOffset(0)}>Сегодня</Btn>
       </div>
 
@@ -127,7 +130,7 @@ export default function ProductionPlanPage(){
             return(
               <tr key={plan.id} style={{borderBottom:`1px solid ${C.border}`}}>
                 <TD s={{fontWeight:500,whiteSpace:"nowrap"}}>{plan.productionDate}</TD>
-                <TD s={{fontWeight:500}}>{prod?.name||"—"}</TD>
+                <TD s={{fontWeight:500}}>{prod?.name||"\u2014"}</TD>
                 <TD>{plan.plannedQty} {prod?.unit}</TD>
                 <TD>
                   {plan.status!=="выполнен"&&plan.status!=="отменён"?
@@ -184,7 +187,7 @@ export default function ProductionPlanPage(){
           const allOk=items.every(i=>i.ok);
           return(
             <div style={{background:allOk?C.successBg:C.dangerBg,border:`1px solid ${allOk?"rgba(90,158,95,.2)":"rgba(196,78,61,.2)"}`,borderRadius:8,padding:10,marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:600,color:allOk?C.success:C.danger,marginBottom:4}}>{allOk?"✅ Сырья достаточно":"⚠ Недостаточно сырья"}</div>
+              <div style={{fontSize:12,fontWeight:600,color:allOk?C.success:C.danger,marginBottom:4}}>{allOk?"\u2705 Сырья достаточно":"\u26a0 Недостаточно сырья"}</div>
               {items.map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:it.ok?C.text:C.danger,padding:"1px 0"}}><span>{it.name}</span><span>{it.needed}/{it.available} {it.unit}</span></div>)}
             </div>
           );
@@ -197,4 +200,7 @@ export default function ProductionPlanPage(){
       {toast&&<Toast {...toast} onClose={()=>setToast(null)}/>}
     </div>
   );
-}
+};
+
+
+export { ProductionPlanPage };

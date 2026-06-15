@@ -1,36 +1,11 @@
-import { useContext, useState, useEffect } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { BOARD_COLUMNS, INIT_PRODUCTS, INIT_CLIENTS } from "../constants";
-import { Btn, PageH, Stat } from "../components/ui";
-
-const BOARD_COL_COLORS = {
-  "новый":          {bg:"rgba(20,32,52,0.9)",  border:"rgba(74,144,226,0.3)",  dot:"#4A90E2", title:"#7BB8F5"},
-  "сборка":         {bg:"rgba(38,28,10,0.9)",  border:"rgba(232,168,56,0.3)",  dot:"#E8A838", title:"#F0C060"},
-  "в производстве": {bg:"rgba(32,20,8,0.9)",   border:"rgba(200,150,62,0.3)",  dot:"#C8963E", title:"#E8B060"},
-  "готов":          {bg:"rgba(8,36,14,0.9)",   border:"rgba(82,201,122,0.3)",  dot:"#52C97A", title:"#80E8A0"},
-};
-
-const fmtElapsed=(since,now)=>{
-  if(!since) return "";
-  const ms=now-new Date(since).getTime();
-  if(ms<0) return "0с";
-  const s=Math.floor(ms/1000);
-  if(s<60) return `${s}с`;
-  const m=Math.floor(s/60);
-  if(m<60) return `${m}мин`;
-  const h=Math.floor(m/60);
-  return `${h}ч ${m%60}м`;
-};
-
-const elapsedColor=(since,now)=>{
-  if(!since) return "#A89882";
-  const m=(now-new Date(since).getTime())/60000;
-  if(m<30) return "#52C97A";
-  if(m<90) return "#E8A838";
-  return "#E85050";
-};
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
 const BoardOrderCard=({order,clients,products,now})=>{
   const client=clients.find(c=>c.id===order.clientId);
@@ -109,7 +84,7 @@ const BoardColumns=({orders,products,clients,now})=>(
   </div>
 );
 
-export function OrdersBoardStandalone(){
+const OrdersBoardStandalone=()=>{
   const [orders,setOrders]=useState([]);
   const [products,setProducts]=useState(INIT_PRODUCTS);
   const [now,setNow]=useState(Date.now());
@@ -121,8 +96,8 @@ export function OrdersBoardStandalone(){
       setSyncing(true);
       try{
         const [o,p]=await Promise.all([
-          fetch("/api/state/dk_client_orders").then(r=>r.ok?r.json():null),
-          fetch("/api/state/dk_products").then(r=>r.ok?r.json():null),
+          fetch("/api/board/orders").then(r=>r.ok?r.json():null),
+          fetch("/api/board/products").then(r=>r.ok?r.json():null),
         ]);
         if(Array.isArray(o)) setOrders(o);
         if(Array.isArray(p)) setProducts(p);
@@ -195,9 +170,9 @@ export function OrdersBoardStandalone(){
       </div>
     </div>
   );
-}
+};
 
-export default function OrdersBoardPage(){
+const OrdersBoardPage=()=>{
   const {clientOrders,products,clients}=useContext(AppContext);
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
@@ -219,4 +194,7 @@ export default function OrdersBoardPage(){
       </div>
     </div>
   );
-}
+};
+
+
+export { OrdersBoardStandalone, OrdersBoardPage };

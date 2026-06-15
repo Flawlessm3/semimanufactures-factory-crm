@@ -1,11 +1,14 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { fmtShort } from "../constants";
-import { Badge, TH, TD, Card, Title, PageH } from "../components/ui";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ReportsPage(){
+// REPORTS
+const ReportsPage = ()=>{
   const {products,tasks,rawMaterials,deliveries,rawMovements}=useContext(AppContext);
   const [tab,setTab]=useState("stock");
   const ap=products.filter(p=>!p.deleted);
@@ -13,12 +16,12 @@ export default function ReportsPage(){
 
   const prodData=useMemo(()=>{
     const m={};tasks.filter(t=>t.status==="завершено").forEach(t=>{const p=products.find(x=>x.id===t.productId);const k=p?.name||"?";m[k]=(m[k]||0)+t.quantity});
-    return Object.entries(m).map(([name,qty])=>({name:name.length>14?name.slice(0,14)+"…":name,qty})).sort((a,b)=>b.qty-a.qty);
+    return Object.entries(m).map(([name,qty])=>({name:name.length>14?name.slice(0,14)+"\u2026":name,qty})).sort((a,b)=>b.qty-a.qty);
   },[tasks,products]);
 
   const rawConsumption=useMemo(()=>{
     const m={};rawMovements.filter(x=>x.type==="out").forEach(x=>{const r=rawMaterials.find(rr=>rr.id===x.rawId);const k=r?.name||"?";m[k]=(m[k]||0)+x.quantity});
-    return Object.entries(m).map(([name,qty])=>({name:name.length>14?name.slice(0,14)+"…":name,qty:+qty.toFixed(1)})).sort((a,b)=>b.qty-a.qty);
+    return Object.entries(m).map(([name,qty])=>({name:name.length>14?name.slice(0,14)+"\u2026":name,qty:+qty.toFixed(1)})).sort((a,b)=>b.qty-a.qty);
   },[rawMovements,rawMaterials]);
 
   return(
@@ -29,7 +32,7 @@ export default function ReportsPage(){
       </div>
       {tab==="stock"&&<Card><Title>Остатки готовой продукции</Title>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={ap.map(p=>({name:p.name.length>14?p.name.slice(0,14)+"…":p.name,stock:p.stock}))} layout="vertical" margin={{left:10}}>
+          <BarChart data={ap.map(p=>({name:p.name.length>14?p.name.slice(0,14)+"\u2026":p.name,stock:p.stock}))} layout="vertical" margin={{left:10}}>
             <CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis type="number" tick={{fill:C.dim,fontSize:10}}/><YAxis dataKey="name" type="category" width={120} tick={{fill:C.muted,fontSize:11}}/>
             <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}}/><Bar dataKey="stock" fill={C.primary} radius={[0,4,4,0]}/>
           </BarChart>
@@ -41,7 +44,7 @@ export default function ReportsPage(){
       </Card>}
       {tab==="raw"&&<Card><Title>Склад сырья</Title>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={rawMaterials.map(r=>({name:r.name.length>12?r.name.slice(0,12)+"…":r.name,stock:r.stock,min:r.minStock}))}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:9}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="stock" fill={C.info} radius={[3,3,0,0]} name="Остаток"/><Bar dataKey="min" fill={C.danger} radius={[3,3,0,0]} name="Минимум"/></BarChart>
+          <BarChart data={rawMaterials.map(r=>({name:r.name.length>12?r.name.slice(0,12)+"\u2026":r.name,stock:r.stock,min:r.minStock}))}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:9}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}}/><Legend wrapperStyle={{fontSize:11}}/><Bar dataKey="stock" fill={C.info} radius={[3,3,0,0]} name="Остаток"/><Bar dataKey="min" fill={C.danger} radius={[3,3,0,0]} name="Минимум"/></BarChart>
         </ResponsiveContainer>
       </Card>}
       {tab==="production"&&<Card><Title>Производство по товарам</Title>
@@ -62,7 +65,7 @@ export default function ReportsPage(){
       </Card>}
       {tab==="profit"&&<Card><Title>Прибыль по товарам</Title>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={ap.map(p=>({name:p.name.length>14?p.name.slice(0,14)+"…":p.name,profit:(p.sellPrice-p.costPrice)*p.stock})).sort((a,b)=>b.profit-a.profit)}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:10}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}}/><Bar dataKey="profit" fill={C.success} radius={[4,4,0,0]} name="Прибыль"/></BarChart>
+          <BarChart data={ap.map(p=>({name:p.name.length>14?p.name.slice(0,14)+"\u2026":p.name,profit:(p.sellPrice-p.costPrice)*p.stock})).sort((a,b)=>b.profit-a.profit)}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:10}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}}/><Bar dataKey="profit" fill={C.success} radius={[4,4,0,0]} name="Прибыль"/></BarChart>
         </ResponsiveContainer>
         <div style={{marginTop:14,overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr><TH>Товар</TH><TH>Себестоимость</TH><TH>Цена</TH><TH>Маржа</TH><TH>Прибыль</TH></tr></thead>
           <tbody>{ap.sort((a,b)=>(b.sellPrice-b.costPrice)*b.stock-(a.sellPrice-a.costPrice)*a.stock).map(p=>(
@@ -71,4 +74,7 @@ export default function ReportsPage(){
       </Card>}
     </div>
   );
-}
+};
+
+
+export { ReportsPage };

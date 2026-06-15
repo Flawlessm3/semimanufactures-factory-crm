@@ -1,12 +1,17 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ORDER_STATUSES, ORDER_PRIORITIES, fmtShort } from "../constants";
-import { Badge, Btn, Inp, Sel, Txa, Modal, Toast, TH, TD, Card, PageH } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ClientsPage(){
-  const {clients,setClients,clientOrders,setClientOrders,products,setProducts,addLog,currentUser,users,sales,inventoryMovements,setInventoryMovements,addNotification}=useContext(AppContext);
+// STORES & ORDERS (бывший Clients)
+const ClientsPage = ()=>{
+  const {clients,setClients,clientOrders,setClientOrders,products,setProducts,addLog,currentUser,users,sales,inventoryMovements,setInventoryMovements,addNotification,debts}=useContext(AppContext);
+  const role=ROLES.find(r=>r.id===currentUser.roleId);
+  const isAdmin=role?.name==="admin"||role?.name==="owner";
   const [tab,setTab]=useState("clients");
   const [modal,setModal]=useState(false);
   const [orderModal,setOrderModal]=useState(false);
@@ -14,15 +19,17 @@ export default function ClientsPage(){
   const [errs,setErrs]=useState({});
   const [selectedClient,setSelectedClient]=useState(null);
   const [historyOrder,setHistoryOrder]=useState(null);
-  const [form,setForm]=useState({name:"",contact:"",phone:"",email:"",address:"",comment:""});
+  const [editStore,setEditStore]=useState(null);
+  const emptyStore={name:"",phone:"",whatsapp:"",address:"",contact:"",comment:"",status:"active",blockReason:""};
+  const [form,setForm]=useState(emptyStore);
   const ap=products.filter(p=>!p.deleted);
-  const [orderForm,setOrderForm]=useState({clientId:"",items:[{productId:ap[0]?.id||"",qty:""}],note:""});
+  const [orderForm,setOrderForm]=useState({clientId:"",items:[{productId:ap[0]?.id||"",qty:""}],note:"",source:"WhatsApp",priority:"нормальный"});
 
-  // Calculate reserved quantities (orders in non-final status)
+  // Calculate reserved quantities — ALL active statuses including "сборка"
   const reserved=useMemo(()=>{
     const m={};
-    clientOrders.filter(o=>o.status==="новый"||o.status==="в производстве"||o.status==="готов").forEach(o=>{
-      o.items.forEach(it=>{m[it.productId]=(m[it.productId]||0)+it.qty});
+    clientOrders.filter(o=>!["отгружен","отменён"].includes(o.status)).forEach(o=>{
+      (o.items||[]).forEach(it=>{m[it.productId]=(m[it.productId]||0)+it.qty});
     });
     return m;
   },[clientOrders]);
@@ -32,24 +39,34 @@ export default function ClientsPage(){
     return (p?.stock||0)-(reserved[productId]||0);
   };
 
-  const openNewClient=()=>{setForm({name:"",contact:"",phone:"",email:"",address:"",comment:""});setErrs({});setModal(true)};
+  const openNewClient=()=>{setEditStore(null);setForm(emptyStore);setErrs({});setModal(true)};
+  const openEditStore=(c)=>{setEditStore(c);setForm({name:c.name,phone:c.phone||"",whatsapp:c.whatsapp||"",address:c.address||"",contact:c.contact||"",comment:c.comment||"",status:c.status||"active",blockReason:c.blockReason||""});setErrs({});setModal(true)};
   const saveClient=()=>{
     if(!form.name.trim()){setErrs({name:"!"});return}
-    setClients(p=>[...p,{id:Date.now(),name:form.name,contact:form.contact,phone:form.phone,email:form.email,address:form.address,comment:form.comment,createdAt:new Date().toISOString()}]);
-    addLog(`Клиент: ${form.name}`);setToast({message:"Клиент добавлен",type:"success"});setModal(false);
+    if(editStore){
+      setClients(p=>p.map(c=>c.id===editStore.id?{...c,...form}:c));
+      addLog(`Магазин обновлён: ${form.name}`);setToast({message:"Магазин обновлён",type:"success"});
+    } else {
+      setClients(p=>[...p,{id:Date.now(),name:form.name,phone:form.phone,whatsapp:form.whatsapp,address:form.address,contact:form.contact,comment:form.comment,status:form.status||"active",blockReason:form.blockReason||"",createdAt:new Date().toISOString()}]);
+      addLog(`Магазин добавлен: ${form.name}`);setToast({message:"Магазин добавлен",type:"success"});
+    }
+    setModal(false);
   };
 
   const addOrderItem=()=>setOrderForm(f=>({...f,items:[...f.items,{productId:ap[0]?.id||"",qty:""}]}));
   const removeOrderItem=(i)=>setOrderForm(f=>({...f,items:f.items.filter((_,idx)=>idx!==i)}));
   const updateOrderItem=(i,field,val)=>setOrderForm(f=>({...f,items:f.items.map((it,idx)=>idx===i?{...it,[field]:val}:it)}));
 
-  const openNewOrder=()=>{setOrderForm({clientId:clients[0]?.id||"",items:[{productId:ap[0]?.id||"",qty:""}],note:"",priority:"нормальный"});setErrs({});setOrderModal(true)};
+  const openNewOrder=()=>{setOrderForm({clientId:clients.filter(c=>c.status!=="blacklist")[0]?.id||"",items:[{productId:ap[0]?.id||"",qty:""}],note:"",source:"WhatsApp",priority:"нормальный"});setErrs({});setOrderModal(true)};
 
   const saveOrder=()=>{
     if(!orderForm.clientId){setErrs({clientId:"!"});return}
+    const store=clients.find(c=>c.id===+orderForm.clientId);
+    // Block blacklisted stores (unless admin/owner overrides)
+    if(store?.status==="blacklist"&&!isAdmin){setToast({message:`${store.name} в чёрном списке — заказ запрещён`,type:"error"});return}
+    if(store?.status==="blocked"&&!isAdmin){setToast({message:`${store.name} заблокирован`,type:"error"});return}
     const validItems=orderForm.items.filter(it=>it.productId&&it.qty&&+it.qty>0);
     if(!validItems.length){setToast({message:"Добавьте товары",type:"error"});return}
-    // Check stock
     for(const it of validItems){
       const avail=getAvailable(+it.productId);
       const pName=products.find(p=>p.id===+it.productId)?.name;
@@ -57,9 +74,12 @@ export default function ClientsPage(){
     }
     const total=validItems.reduce((s,it)=>{const p=products.find(x=>x.id===+it.productId);return s+(p?p.sellPrice*+it.qty:0)},0);
     const now=new Date().toISOString();
-    setClientOrders(p=>[...p,{id:Date.now(),clientId:+orderForm.clientId,items:validItems.map(it=>({productId:+it.productId,qty:+it.qty})),orderDate:now,status:"новый",total,note:orderForm.note,priority:orderForm.priority||"нормальный",statusChangedAt:now,shippedAt:null,shippedBy:null,history:[{from:null,to:"новый",userId:currentUser.id,userName:currentUser.name,at:now}]}]);
-    addLog(`Заказ: ${clients.find(c=>c.id===+orderForm.clientId)?.name} — ${total.toLocaleString("ru")} ₽`);
-    setToast({message:"Заказ создан (товар зарезервирован)",type:"success"});setOrderModal(false);
+    // Snapshot address at time of order
+    const addressSnapshot=store?.address||"";
+    const itemsSnapshot=validItems.map(it=>({productId:+it.productId,qty:+it.qty,productName:products.find(p=>p.id===+it.productId)?.name||"?",unit:products.find(p=>p.id===+it.productId)?.unit||""}));
+    setClientOrders(p=>[...p,{id:Date.now(),clientId:+orderForm.clientId,items:itemsSnapshot,orderDate:now,status:"новый",total,note:orderForm.note,source:orderForm.source||"вручную",priority:orderForm.priority||"нормальный",addressSnapshot,statusChangedAt:now,shippedAt:null,shippedBy:null,history:[{from:null,to:"новый",userId:currentUser.id,userName:currentUser.name,at:now}]}]);
+    addLog(`Заказ от ${store?.name} — ${total.toLocaleString("ru")} ₽ (${orderForm.source})`);
+    setToast({message:"Заказ создан — товар зарезервирован",type:"success"});setOrderModal(false);
   };
 
   const updateOrderStatus=(order,newStatus)=>{
@@ -97,43 +117,62 @@ export default function ClientsPage(){
 
   const clientStats=clients.map(c=>{
     const orders=clientOrders.filter(o=>o.clientId===c.id);
-    return{...c,orderCount:orders.length,totalSpent:orders.reduce((s,o)=>s+o.total,0)};
+    const storeDebts=(debts||[]).filter(d=>d.storeId===c.id&&d.status!=="погашен");
+    const totalDebt=storeDebts.reduce((s,d)=>s+d.remaining,0);
+    return{...c,orderCount:orders.length,totalSpent:orders.reduce((s,o)=>s+o.total,0),totalDebt,activeOrders:orders.filter(o=>!["отгружен","отменён"].includes(o.status)).length};
   });
 
   const stIco=(s)=>s==="отгружен"?"success":s==="отменён"?"danger":s==="готов"?"purple":"info";
+  const statusColor=(s)=>s==="blacklist"?"danger":s==="blocked"?"orange":"success";
+  const statusLabel=(s)=>STORE_STATUS_LABELS[s]||s;
 
   return(
     <div>
-      <PageH title="Клиенты и заказы">
+      <PageH title="Магазины и заказы">
         <div style={{display:"flex",gap:5,alignItems:"center"}}>
-          {[["clients","Клиенты"],["orders","Заказы"]].map(([id,lb])=>(
+          {[["clients","Магазины"],["orders","Заказы"]].map(([id,lb])=>(
             <button key={id} onClick={()=>setTab(id)} style={{padding:"6px 14px",borderRadius:7,border:`1px solid ${tab===id?C.primary:C.border}`,background:tab===id?C.primaryBg:C.surface,color:tab===id?C.primary:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{lb}</button>
           ))}
           <button onClick={()=>window.open(window.location.href.split("?")[0]+"?board=1","_blank")} style={{padding:"6px 14px",borderRadius:7,border:`1px solid ${C.border}`,background:C.surface,color:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5}}>⬡ Панель</button>
         </div>
-        {tab==="clients"&&<Btn onClick={openNewClient} icon={<I.plus size={15}/>}>Новый клиент</Btn>}
+        {tab==="clients"&&<Btn onClick={openNewClient} icon={<I.plus size={15}/>}>Новый магазин</Btn>}
         {tab==="orders"&&<Btn onClick={openNewOrder} icon={<I.plus size={15}/>}>Новый заказ</Btn>}
       </PageH>
 
       {tab==="clients"&&(
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:12}}>
           {clientStats.map(c=>(
-            <Card key={c.id} s={{cursor:"pointer"}} onClick={()=>setSelectedClient(selectedClient===c.id?null:c.id)}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                <div style={{fontSize:15,fontWeight:700,color:C.text}}>{c.name}</div>
-                <Badge color="info">{c.orderCount} зак.</Badge>
+            <Card key={c.id} s={{cursor:"pointer",borderLeft:`3px solid ${C[statusColor(c.status||"active")]}`}} onClick={()=>setSelectedClient(selectedClient===c.id?null:c.id)}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>{c.name}</div>
+                  {c.status&&c.status!=="active"&&<Badge color={statusColor(c.status)} s={{fontSize:10,marginTop:2}}>{statusLabel(c.status)}</Badge>}
+                </div>
+                <div style={{display:"flex",gap:5,flexShrink:0}}>
+                  <Badge color="info" s={{fontSize:10}}>{c.activeOrders} акт.</Badge>
+                  {c.totalDebt>0&&<Badge color="danger" s={{fontSize:10}}>{(c.totalDebt/1000).toFixed(0)}т₽ долг</Badge>}
+                </div>
               </div>
-              <div style={{fontSize:12,color:C.muted}}>{c.contact} · {c.phone}</div>
-              {c.address&&<div style={{fontSize:11,color:C.dim}}>{c.address}</div>}
-              <div style={{marginTop:8}}><Badge color="success">{c.totalSpent.toLocaleString("ru")} ₽</Badge></div>
+              {c.phone&&<div style={{fontSize:12,color:C.muted,display:"flex",gap:10}}><span>📞 {c.phone}</span>{c.whatsapp&&<span>💬 {c.whatsapp}</span>}</div>}
+              {c.address&&<div style={{fontSize:11,color:C.dim,marginTop:2}}>📍 {c.address}</div>}
+              {c.status==="blacklist"&&c.blockReason&&<div style={{fontSize:11,color:C.danger,marginTop:4,fontStyle:"italic"}}>Причина: {c.blockReason}</div>}
+              <div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap"}}>
+                <Badge color="success" s={{fontSize:10}}>{c.totalSpent.toLocaleString("ru")} ₽ всего</Badge>
+                {c.orderCount>0&&<Badge color="primary" s={{fontSize:10}}>{c.orderCount} заказов</Badge>}
+              </div>
+              <div style={{marginTop:8,display:"flex",gap:6}}>
+                <button onClick={e=>{e.stopPropagation();openEditStore(c)}} style={{fontSize:11,color:C.primary,background:"none",border:`1px solid ${C.primary}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>Изменить</button>
+                {isAdmin&&c.status!=="blacklist"&&<button onClick={e=>{e.stopPropagation();setClients(p=>p.map(x=>x.id===c.id?{...x,status:"blacklist",blockReason:"заблокирован вручную"}:x));addLog(`Чёрный список: ${c.name}`)}} style={{fontSize:11,color:C.danger,background:"none",border:`1px solid ${C.danger}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>В ЧС</button>}
+                {isAdmin&&c.status!=="active"&&<button onClick={e=>{e.stopPropagation();setClients(p=>p.map(x=>x.id===c.id?{...x,status:"active",blockReason:""}:x));addLog(`Разблок.: ${c.name}`)}} style={{fontSize:11,color:C.success,background:"none",border:`1px solid ${C.success}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>Разблокировать</button>}
+              </div>
               {selectedClient===c.id&&(
                 <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-                  <div style={{fontSize:12,fontWeight:600,color:C.text,marginBottom:6}}>История заказов:</div>
-                  {clientOrders.filter(o=>o.clientId===c.id).sort((a,b)=>new Date(b.orderDate)-new Date(a.orderDate)).map(o=>(
+                  <div style={{fontSize:12,fontWeight:600,color:C.text,marginBottom:6}}>Последние заказы:</div>
+                  {clientOrders.filter(o=>o.clientId===c.id).sort((a,b)=>new Date(b.orderDate)-new Date(a.orderDate)).slice(0,5).map(o=>(
                     <div key={o.id} style={{padding:"6px 0",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div>
-                        <div style={{fontSize:12,color:C.text}}>{o.items.map(it=>{const p=products.find(x=>x.id===it.productId);return`${p?.name||"?"} x${it.qty}`}).join(", ")}</div>
-                        <div style={{fontSize:10,color:C.dim}}>{fmtShort(o.orderDate)} {o.shippedAt?`· Отгружен: ${fmtShort(o.shippedAt)}`:""}</div>
+                        <div style={{fontSize:12,color:C.text}}>{(o.items||[]).map(it=>it.productName?`${it.productName} x${it.qty}`:`? x${it.qty}`).join(", ")}</div>
+                        <div style={{fontSize:10,color:C.dim}}>{fmtShort(o.orderDate)} {o.source?`· ${o.source}`:""} {o.shippedAt?`· Отгружен: ${fmtShort(o.shippedAt)}`:""}</div>
                       </div>
                       <Badge color={stIco(o.status)} s={{fontSize:10}}>{o.status}</Badge>
                     </div>
@@ -142,25 +181,33 @@ export default function ClientsPage(){
               )}
             </Card>
           ))}
+          {clients.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:50,color:C.dim}}>Нет магазинов. Добавьте первый.</div>}
         </div>
       )}
 
       {tab==="orders"&&(
         <Card s={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
-            <thead><tr><TH>#</TH><TH>Дата</TH><TH>Клиент</TH><TH>Товары</TH><TH>Сумма</TH><TH>Статус</TH><TH>Отгрузка</TH><TH></TH><TH></TH></tr></thead>
-            <tbody>{[...clientOrders].sort((a,b)=>new Date(b.orderDate)-new Date(a.orderDate)).map(o=>{
+            <thead><tr><TH>#</TH><TH>Дата</TH><TH>Магазин</TH><TH>Товары</TH><TH>Сумма</TH><TH>Источник</TH><TH>Статус</TH><TH>Отгрузка</TH><TH></TH></tr></thead>
+            <tbody>{[...clientOrders].sort((a,b)=>{const p={срочный:0,важный:1,нормальный:2};const pd=(p[a.priority]??2)-(p[b.priority]??2);return pd!==0?pd:new Date(b.orderDate)-new Date(a.orderDate)}).map(o=>{
               const cl=clients.find(c=>c.id===o.clientId);
               const shipper=o.shippedBy?users.find(u=>u.id===o.shippedBy):null;
+              const rowBg=o.priority==="срочный"&&!["отгружен","отменён"].includes(o.status)?`${C.danger}08`:o.priority==="важный"&&!["отгружен","отменён"].includes(o.status)?`${C.orange}06`:"transparent";
               return(
-                <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`,background:rowBg}}>
                   <TD s={{fontWeight:600,color:C.dim}}>#{o.id}</TD>
                   <TD s={{fontSize:12,whiteSpace:"nowrap"}}>{fmtShort(o.orderDate)}</TD>
-                  <TD s={{fontWeight:500}}>{cl?.name||"—"}</TD>
-                  <TD s={{fontSize:12}}>{o.items.map(it=>{const p=products.find(x=>x.id===it.productId);return`${p?.name||"?"} x${it.qty}`}).join(", ")}</TD>
-                  <TD s={{fontWeight:700,color:C.primary}}>{o.total.toLocaleString("ru")} ₽</TD>
+                  <TD s={{fontWeight:500}}>
+                    {cl?.name||"—"}
+                    {o.priority==="срочный"&&<span style={{marginLeft:5,fontSize:9,fontWeight:700,color:C.danger,background:`${C.danger}15`,padding:"1px 5px",borderRadius:3}}>СРОЧНО</span>}
+                    {o.priority==="важный"&&<span style={{marginLeft:5,fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}15`,padding:"1px 5px",borderRadius:3}}>ВАЖНО</span>}
+                    {o.addressSnapshot&&<div style={{fontSize:10,color:C.dim}}>📍 {o.addressSnapshot}</div>}
+                  </TD>
+                  <TD s={{fontSize:12}}>{(o.items||[]).map(it=>it.productName?`${it.productName} x${it.qty}`:(products.find(x=>x.id===it.productId)?.name||"?")+" x"+it.qty).join(", ")}</TD>
+                  <TD s={{fontWeight:700,color:C.primary}}>{(o.total||0).toLocaleString("ru")} ₽</TD>
+                  <TD s={{fontSize:11,color:C.muted}}>{o.source||"—"}</TD>
                   <TD>
-                    {o.status!=="отгружен"&&o.status!=="отменён"?
+                    {!["отгружен","отменён"].includes(o.status)?
                       <select value={o.status} onChange={e=>updateOrderStatus(o,e.target.value)} style={{padding:"4px 6px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,color:C.text,fontSize:11,fontFamily:"inherit"}}>
                         {ORDER_STATUSES.filter(s=>s!=="отгружен").map(s=><option key={s} value={s}>{s}</option>)}
                       </select>
@@ -168,13 +215,10 @@ export default function ClientsPage(){
                     }
                   </TD>
                   <TD s={{fontSize:11,color:C.dim}}>
-                    {o.shippedAt?<span>{fmtShort(o.shippedAt)}<br/>{shipper?.name?.split(" ").slice(0,2).join(" ")}</span>:"—"}
+                    {o.shippedAt?<span>{fmtShort(o.shippedAt)}<br/><span style={{color:C.dim}}>{shipper?.name?.split(" ")[0]}</span></span>:<span>{(o.status==="готов")&&<Btn sz="sm" v="success" onClick={()=>shipOrder(o)} icon={<I.truck size={12}/>}>Отгрузить</Btn>}</span>}
                   </TD>
                   <TD>
-                    {(o.status==="готов")&&<Btn sz="sm" v="success" onClick={()=>shipOrder(o)} icon={<I.truck size={13}/>}>Отгрузить</Btn>}
-                  </TD>
-                  <TD>
-                    {(o.history||[]).length>0&&<button onClick={()=>setHistoryOrder(o)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 6px",borderRadius:4,textDecoration:"underline",fontFamily:"inherit"}} title="История изменений">История</button>}
+                    {(o.history||[]).length>0&&<button onClick={()=>setHistoryOrder(o)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 6px",borderRadius:4,textDecoration:"underline",fontFamily:"inherit"}}>История</button>}
                   </TD>
                 </tr>
               );
@@ -183,25 +227,29 @@ export default function ClientsPage(){
         </div></Card>
       )}
 
-      {/* New Client Modal */}
-      <Modal open={modal} onClose={()=>setModal(false)} title="Новый клиент" width={480}>
-        <Inp label="Название компании" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} error={errs.name}/>
+      {/* New/Edit Store Modal */}
+      <Modal open={modal} onClose={()=>setModal(false)} title={editStore?"Изменить магазин":"Новый магазин"} width={500}>
+        <Inp label="Название магазина" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} error={errs.name}/>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-          <Inp label="Контактное лицо" value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/>
           <Inp label="Телефон" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/>
-          <Inp label="Email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/>
-          <Inp label="Адрес" value={form.address} onChange={e=>setForm({...form,address:e.target.value})}/>
+          <Inp label="WhatsApp" value={form.whatsapp} onChange={e=>setForm({...form,whatsapp:e.target.value})} placeholder="+7..."/>
+          <Inp label="Контактное лицо" value={form.contact} onChange={e=>setForm({...form,contact:e.target.value})}/>
+          <Inp label="Адрес доставки" value={form.address} onChange={e=>setForm({...form,address:e.target.value})}/>
         </div>
+        <Sel label="Статус" value={form.status} onChange={e=>setForm({...form,status:e.target.value})} options={STORE_STATUSES.map(s=>({value:s,label:STORE_STATUS_LABELS[s]}))}/>
+        {form.status!=="active"&&<Inp label="Причина блокировки" value={form.blockReason} onChange={e=>setForm({...form,blockReason:e.target.value})}/>}
         <Txa label="Комментарий" value={form.comment} onChange={e=>setForm({...form,comment:e.target.value})}/>
-        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:6}}><Btn v="secondary" onClick={()=>setModal(false)}>Отмена</Btn><Btn onClick={saveClient}>Добавить</Btn></div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:6}}><Btn v="secondary" onClick={()=>setModal(false)}>Отмена</Btn><Btn onClick={saveClient}>{editStore?"Сохранить":"Добавить"}</Btn></div>
       </Modal>
 
-      {/* New Order Modal with stock check */}
+      {/* New Order Modal */}
       <Modal open={orderModal} onClose={()=>setOrderModal(false)} title="Новый заказ" width={560}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-          <Sel label="Клиент" value={orderForm.clientId} onChange={e=>setOrderForm({...orderForm,clientId:e.target.value})} error={errs.clientId} options={[{value:"",label:"Выберите"},...clients.map(c=>({value:c.id,label:c.name}))]}/>
+          <Sel label="Магазин" value={orderForm.clientId} onChange={e=>setOrderForm({...orderForm,clientId:e.target.value})} error={errs.clientId} options={[{value:"",label:"Выберите"},...clients.map(c=>({value:c.id,label:`${c.name}${c.status!=="active"?" ⚠":""}`}))]}/>
           <Sel label="Приоритет" value={orderForm.priority||"нормальный"} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})} options={ORDER_PRIORITIES.map(p=>({value:p,label:p}))}/>
+          <Sel label="Источник" value={orderForm.source||"WhatsApp"} onChange={e=>setOrderForm({...orderForm,source:e.target.value})} options={ORDER_SOURCES.map(s=>({value:s,label:s}))}/>
         </div>
+        {orderForm.clientId&&(()=>{const st=clients.find(c=>c.id===+orderForm.clientId);return st?.status==="blacklist"?<div style={{padding:"8px 12px",background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:7,fontSize:12,color:C.danger,marginBottom:8}}>⚠ Магазин в чёрном списке: {st.blockReason||"причина не указана"}</div>:st?.status==="blocked"?<div style={{padding:"8px 12px",background:`${C.orange}15`,border:`1px solid ${C.orange}30`,borderRadius:7,fontSize:12,color:C.orange,marginBottom:8}}>⚠ Магазин заблокирован</div>:null;})()}
         <div style={{marginBottom:12}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <label style={{fontSize:12,fontWeight:500,color:C.muted}}>Товары</label>
@@ -255,4 +303,7 @@ export default function ClientsPage(){
       {toast&&<Toast {...toast} onClose={()=>setToast(null)}/>}
     </div>
   );
-}
+};
+
+
+export { ClientsPage };

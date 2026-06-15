@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef, useMemo, useContext } from "react";
-import { AppContext } from "../../context/AppContext";
-import { C } from "../../theme";
-import { I } from "../../icons";
-import { Badge } from "../ui";
-import { relTime } from "../../constants";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { AppContext } from "../../context/AppContext.js";
+import { ROLES } from "../../constants/index.js";
+import { C } from "../../theme/colors.js";
+import { I } from "../../icons/Icons.jsx";
+import { Badge, Btn, Modal, Card } from "../../components/ui/index.jsx";
 
-export default function NotificationBell({onGoToPage}){
-  const {notifications,setNotifications,currentUser}=useContext(AppContext);
+// NOTIFICATION BELL (Header Dropdown)
+const NotificationBell = ({onGoToPage})=>{
+  const {notifications,setNotifsL,currentUser,users}=useContext(AppContext);
   const [open,setOpen]=useState(false);
   const ref=useRef(null);
 
@@ -18,16 +19,28 @@ export default function NotificationBell({onGoToPage}){
 
   const unread=visible.filter(n=>!n.readBy?.includes(currentUser.id)).length;
 
-  const markRead=(id)=>{
-    setNotifications(p=>p.map(n=>n.id===id?{...n,readBy:[...(n.readBy||[]).filter(x=>x!==currentUser.id),currentUser.id]}:n));
+  // markRead / markAllRead go through dedicated action endpoints so workers
+  // (who have no write access to dk_notifications) can still mark their own
+  // readBy entries. Server returns the updated list; we apply it locally via
+  // setNotifsL to avoid a redundant POST to /api/state/dk_notifications.
+  const markRead=async(id)=>{
+    try{
+      const r=await fetch("/api/actions/notifications/read",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({notificationId:id}),
+      });
+      if(!r.ok) return;
+      const data=await r.json();
+      if(data?.dk_notifications) setNotifsL(data.dk_notifications);
+    }catch{}
   };
-  const markAllRead=()=>{
-    setNotifications(p=>p.map(n=>{
-      if((n.targetAll||n.targetUsers?.includes(currentUser.id))&&!n.readBy?.includes(currentUser.id)){
-        return {...n,readBy:[...(n.readBy||[]),currentUser.id]};
-      }
-      return n;
-    }));
+  const markAllRead=async()=>{
+    try{
+      const r=await fetch("/api/actions/notifications/read-all",{method:"POST"});
+      if(!r.ok) return;
+      const data=await r.json();
+      if(data?.dk_notifications) setNotifsL(data.dk_notifications);
+    }catch{}
   };
 
   const nColor=t=>t==="ошибка"?C.danger:t==="предупреждение"?C.primary:C.info;
@@ -73,4 +86,7 @@ export default function NotificationBell({onGoToPage}){
       )}
     </div>
   );
-}
+};
+
+
+export { NotificationBell };

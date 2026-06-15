@@ -1,9 +1,13 @@
-import { useContext, useState, useEffect } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ROLES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants";
-import { Badge, Btn, Inp, Sel, Modal, TH, TD, Card, PageH } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
+
+// CAMERAS
 
 // Animated demo "camera feed" — no external dependencies
 const DemoCameraFeed = ({camId, name}) => {
@@ -158,7 +162,8 @@ const CameraTile = ({cam, onFullscreen}) => {
   );
 };
 
-export default function CameraPage(){
+// Camera page
+const CameraPage = () => {
   const {cameras, setCameras, currentUser} = useContext(AppContext);
   const role = ROLES.find(r => r.id === currentUser.roleId);
   const canManage = role?.name === "admin" || role?.name === "owner";
@@ -337,4 +342,33 @@ export default function CameraPage(){
       </Modal>
     </div>
   );
-}
+};
+const BOARD_COL_COLORS = {
+  "новый":          {bg:"rgba(20,32,52,0.9)",  border:"rgba(74,144,226,0.3)",  dot:"#4A90E2", title:"#7BB8F5"},
+  "сборка":         {bg:"rgba(38,28,10,0.9)",  border:"rgba(232,168,56,0.3)",  dot:"#E8A838", title:"#F0C060"},
+  "в производстве": {bg:"rgba(32,20,8,0.9)",   border:"rgba(200,150,62,0.3)",  dot:"#C8963E", title:"#E8B060"},
+  "готов":          {bg:"rgba(8,36,14,0.9)",   border:"rgba(82,201,122,0.3)",  dot:"#52C97A", title:"#80E8A0"},
+};
+
+const fmtElapsed=(since,now)=>{
+  if(!since) return "";
+  const ms=now-new Date(since).getTime();
+  if(ms<0) return "0с";
+  const s=Math.floor(ms/1000);
+  if(s<60) return `${s}с`;
+  const m=Math.floor(s/60);
+  if(m<60) return `${m}мин`;
+  const h=Math.floor(m/60);
+  return `${h}ч ${m%60}м`;
+};
+
+const elapsedColor=(since,now)=>{
+  if(!since) return "#A89882";
+  const m=(now-new Date(since).getTime())/60000;
+  if(m<30) return "#52C97A";
+  if(m<90) return "#E8A838";
+  return "#E85050";
+};
+
+
+export { CameraPage };

@@ -1,11 +1,14 @@
-import { useContext, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { Badge, TH, TD, Card, Title, PageH, Stat } from "../components/ui";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ProfitAnalyticsPage(){
+// PROFIT ANALYTICS
+const ProfitAnalyticsPage = ()=>{
   const {products,tasks,taskEmployees,rawMaterials,recipes,deliveries}=useContext(AppContext);
   const ap=products.filter(p=>!p.deleted);
 
@@ -31,8 +34,8 @@ export default function ProfitAnalyticsPage(){
   const bestProduct=profitData[0];
   const totalDeliveryCost=deliveries.reduce((s,d)=>s+d.totalPrice,0);
 
-  const chartData=profitData.filter(p=>p.totalProfit>0).slice(0,8).map(p=>({name:p.name.length>12?p.name.slice(0,12)+"…":p.name,profit:p.totalProfit/1000,revenue:p.totalRevenue/1000,cost:p.totalCost/1000}));
-  const marginChart=profitData.filter(p=>p.produced>0).map(p=>({name:p.name.length>12?p.name.slice(0,12)+"…":p.name,margin:p.margin}));
+  const chartData=profitData.filter(p=>p.totalProfit>0).slice(0,8).map(p=>({name:p.name.length>12?p.name.slice(0,12)+"\u2026":p.name,profit:p.totalProfit/1000,revenue:p.totalRevenue/1000,cost:p.totalCost/1000}));
+  const marginChart=profitData.filter(p=>p.produced>0).map(p=>({name:p.name.length>12?p.name.slice(0,12)+"\u2026":p.name,margin:p.margin}));
 
   return(
     <div>
@@ -53,7 +56,7 @@ export default function ProfitAnalyticsPage(){
             <div>
               <div style={{fontSize:11,color:C.muted}}>Самый прибыльный товар</div>
               <div style={{fontSize:17,fontWeight:800,color:C.text}}>{bestProduct.name}</div>
-              <div style={{fontSize:12,color:C.success,fontWeight:600}}>Прибыль: {bestProduct.totalProfit.toLocaleString("ru")}₽ · Маржа: {bestProduct.margin}%</div>
+              <div style={{fontSize:12,color:C.success,fontWeight:600}}>Прибыль: {bestProduct.totalProfit.toLocaleString("ru")}₽ \u00b7 Маржа: {bestProduct.margin}%</div>
             </div>
           </div>
         </Card>
@@ -118,4 +121,7 @@ export default function ProfitAnalyticsPage(){
       </Card>
     </div>
   );
-}
+};
+
+
+export { ProfitAnalyticsPage };

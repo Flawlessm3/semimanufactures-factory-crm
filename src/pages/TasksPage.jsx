@@ -1,19 +1,22 @@
-import { useContext, useState, useMemo, useEffect } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ROLES, TASK_STATUSES, fmtDate, fmtShort } from "../constants";
-import { Badge, Btn, Inp, Sel, Txa, Modal, Toast, Card, PageH } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function TasksPage(){
-  const {tasks,setTasks,taskEmployees,setTaskEmployees,products,setProducts,users,rawMaterials,setRawMaterials,recipes,setRawMovements,addLog,currentUser,addNotification,employeeHistory,setEmployeeHistory}=useContext(AppContext);
+// TASKS
+const TasksPage = ()=>{
+  const {tasks,setTasks,taskEmployees,setTaskEmployees,products,setProducts,users,rawMaterials,recipes,addLog,currentUser,addNotification,productionOutputs,setProductionOutputs,setBatches,applyOutput,applyServerState}=useContext(AppContext);
   const [modal,setModal]=useState(false);
   const [completeModal,setCompleteModal]=useState(null);
   const [toast,setToast]=useState(null);
   const [errs,setErrs]=useState({});
-  const [filter,setFilter]=useState("all");
   const role=ROLES.find(r=>r.id===currentUser.roleId);
   const isWorker=role?.name==="worker";
+  const [filter,setFilter]=useState(isWorker?"активные":"all");
   const canCreate=role?.name==="admin"||role?.name==="manager";
 
   const ap=products.filter(p=>!p.deleted);
@@ -24,8 +27,17 @@ export default function TasksPage(){
 
   const filtered=useMemo(()=>{
     let l=isWorker?tasks.filter(t=>(t.userIds||[]).includes(currentUser.id)):[...tasks];
-    if(filter!=="all") l=l.filter(t=>t.status===filter);
-    return l.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+    if(filter==="активные") l=l.filter(t=>t.status==="назначено"||t.status==="в работе");
+    else if(filter!=="all") l=l.filter(t=>t.status===filter);
+    // Sort: overdue first, then by deadline
+    return l.sort((a,b)=>{
+      const ao=!a.completedAt&&new Date()>new Date(a.deadline);
+      const bo=!b.completedAt&&new Date()>new Date(b.deadline);
+      if(ao&&!bo) return -1; if(!ao&&bo) return 1;
+      if(a.status==="в работе"&&b.status!=="в работе") return -1;
+      if(a.status!=="в работе"&&b.status==="в работе") return 1;
+      return new Date(a.deadline)-new Date(b.deadline);
+    });
   },[tasks,filter,isWorker,currentUser]);
 
   const checkRaw=(productId,qty)=>{
@@ -69,8 +81,8 @@ export default function TasksPage(){
     setTaskEmployees(p=>[...p,...newTEs]);
     const pName=products.find(p=>p.id===+form.productId)?.name;
     const names=form.userIds.map(uid=>users.find(u=>u.id===uid)?.name?.split(" ").slice(0,2).join(" ")).join(", ");
-    addLog(`Задание: ${pName} x${form.quantity} → ${names}`);
-    addNotification({title:`Новое задание: ${pName}`,type:"информация",content:`Назначено: ${pName} x${form.quantity} → ${names}. Срок: ${fmtDate(form.deadline)}`,targetUsers:form.userIds});
+    addLog(`Задание: ${pName} x${form.quantity} \u2192 ${names}`);
+    addNotification({title:`Новое задание: ${pName}`,type:"информация",content:`Назначено: ${pName} x${form.quantity} \u2192 ${names}. Срок: ${fmtDate(form.deadline)}`,targetUsers:form.userIds});
     setToast({message:"Задание создано",type:"success"});setModal(false);
   };
 
@@ -87,54 +99,104 @@ export default function TasksPage(){
     setCompleteModal(t);
   };
 
-  const doComplete=()=>{
+  const doComplete=async()=>{
     const t=completeModal;if(!t)return;
+    // Guard: task already completed (double-click / race condition)
+    if(t.status==="завершено"||t.status==="просрочено"){setCompleteModal(null);return;}
+    // Guard: productionOutput already exists for this task
+    if((productionOutputs||[]).some(o=>o.taskId===t.id)){
+      setToast({message:"Выпуск для этого задания уже создан",type:"warn"});
+      setCompleteModal(null);return;
+    }
     const totalAssigned=Object.values(empQtys).reduce((s,v)=>s+(+v||0),0);
     if(totalAssigned!==t.quantity){setToast({message:`Сумма (${totalAssigned}) должна равняться ${t.quantity}`,type:"error"});return}
-    const now=new Date().toISOString();
-    const recipe=recipes.find(r=>r.productId===t.productId);
-    if(recipe){
-      recipe.items.forEach(it=>{
-        const needed=it.qty*t.quantity;
-        setRawMaterials(p=>p.map(r=>r.id===it.rawId?{...r,stock:+(r.stock-needed).toFixed(3),updatedAt:now}:r));
-        setRawMovements(p=>[...p,{id:Date.now()+Math.random(),rawId:it.rawId,type:"out",quantity:+needed.toFixed(3),reason:`Задание #${t.id}`,date:now}]);
-      });
+
+    // ── Worker path: server action endpoint ──
+    // Workers cannot write manager-only keys (dk_batches, dk_products, dk_raw_mats, etc.)
+    // so we delegate all derived state updates to the server atomically.
+    const role=ROLES.find(r=>r.id===currentUser.roleId);
+    if(role?.name==="worker"){
+      try{
+        const r=await fetch("/api/actions/task-complete",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({taskId:t.id,quantities:empQtys}),
+        });
+        const data=await r.json();
+        if(!r.ok){setToast({message:data.error||"Ошибка сервера",type:"error"});return;}
+        applyServerState(data.state);
+        setToast({message:"Завершено!",type:"success"});
+      }catch(e){
+        setToast({message:"Нет соединения с сервером",type:"error"});
+      }
+      setCompleteModal(null);
+      return;
     }
-    setProducts(p=>p.map(x=>x.id===t.productId?{...x,stock:x.stock+t.quantity,updatedAt:now}:x));
+
+    // ── Manager / Admin path (unchanged) ──
+    const now=new Date().toISOString();
     const isLate=new Date(now)>new Date(t.deadline);
+
+    // 1. Update task and taskEmployee statuses
     setTasks(p=>p.map(x=>x.id===t.id?{...x,status:isLate?"просрочено":"завершено",completedAt:now}:x));
-    // Update task_employees with individual produced quantities
     Object.entries(empQtys).forEach(([uid,qty])=>{
       setTaskEmployees(p=>p.map(te=>te.taskId===t.id&&te.employeeId===+uid?{...te,producedQty:+qty,status:isLate?"просрочено":"завершено"}:te));
     });
-    // Update employee_history
-    const dateStr=now.slice(0,10);
+
+    // 2. One batch for the entire task (all workers combined = t.quantity).
+    //    batchId is shared across all per-worker outputs so revertOutput knows which batch to remove.
+    const sharedBatchId=t.id+0.5;
+    const expiresAt=new Date(new Date(now).getTime()+7*24*3600*1000).toISOString();
+    setBatches(p=>[...(p||[]),{id:sharedBatchId,productId:t.productId,quantity:t.quantity,producedAt:now,expiresAt,createdBy:currentUser.id,status:"активна",note:t.note||"",taskId:t.id}]);
+
+    // 3. One productionOutput per worker (with their individual qty share).
+    //    applyOutput handles: stock, inventoryMovements, rawMaterials, rawMovements, employeeHistory, productionPlans.
+    //    First worker's output carries batchId so revertOutput can remove the batch;
+    //    subsequent workers carry batchId:null (batch already created above).
+    let runningStock=products.find(p=>p.id===t.productId)?.stock||0;
+    let firstWorker=true;
     Object.entries(empQtys).forEach(([uid,qty])=>{
-      setEmployeeHistory(p=>{
-        const existing=p.find(h=>h.employeeId===+uid&&h.date===dateStr);
-        if(existing){
-          return p.map(h=>h.id===existing.id?{...h,tasksCompleted:h.tasksCompleted+1,producedQty:h.producedQty+(+qty)}:h);
-        }
-        return [...p,{id:Date.now()+Math.random(),employeeId:+uid,date:dateStr,attendance:"present",tasksCompleted:1,producedQty:+qty,workStart:"09:00",workEnd:fmtDate(now).slice(-5),comment:""}];
-      });
+      if(+qty<=0) return;
+      const outId=Date.now()+Math.random();
+      const newOut={id:outId,productId:t.productId,employeeId:+uid,quantity:+qty,date:now,taskId:t.id,source:"task",batchId:firstWorker?sharedBatchId:null,comment:t.note||"",createdAt:now,createdBy:currentUser.id};
+      firstWorker=false;
+      setProductionOutputs(p=>[...(p||[]),newOut]);
+      applyOutput(newOut,runningStock);
+      runningStock+=+qty;
     });
+
+    // 4. Logging, notifications, low-stock alerts
     const pName=products.find(p=>p.id===t.productId)?.name;
     const names=(t.userIds||[]).map(uid=>users.find(u=>u.id===uid)?.name?.split(" ").slice(0,2).join(" ")).join(", ");
-    addLog(`Завершено: ${pName} x${t.quantity}${isLate?" (просрочено)":""} → ${names}`);
+    addLog(`Завершено: ${pName} x${t.quantity}${isLate?" (просрочено)":""} \u2192 ${names}`);
     addNotification({title:`Задание ${isLate?"просрочено":"выполнено"}: ${pName}`,type:isLate?"ошибка":"информация",content:`${names} ${isLate?"просрочили":"завершили"}: ${pName} x${t.quantity}`,targetAll:true});
+    const recipe=recipes.find(r=>r.productId===t.productId);
     rawMaterials.forEach(r=>{
-      const cur=r.stock-(recipe?.items.find(x=>x.rawId===r.id)?.qty||0)*t.quantity;
-      if(cur<=r.minStock){addNotification({title:`Низкий остаток: ${r.name}`,type:"предупреждение",content:`${r.name}: остаток ${cur.toFixed(1)} ${r.unit} при минимуме ${r.minStock} ${r.unit}`,targetAll:true})}
+      const est=r.stock-(recipe?.items.find(x=>x.rawId===r.id)?.qty||0)*t.quantity;
+      if(est<=r.minStock){addNotification({title:`Низкий остаток: ${r.name}`,type:"предупреждение",content:`${r.name}: ~${est.toFixed(1)} ${r.unit} (мин. ${r.minStock} ${r.unit})`,targetAll:true});}
     });
     setToast({message:isLate?"Завершено с опозданием":"Завершено!",type:isLate?"warn":"success"});
     setCompleteModal(null);
   };
 
-  const startTask=(t)=>{
-    setTasks(p=>p.map(x=>x.id===t.id?{...x,status:"в работе"}:x));
-    setTaskEmployees(p=>p.map(te=>te.taskId===t.id?{...te,status:"в работе"}:te));
-    addLog(`Начато: задание #${t.id}`);
-    setToast({message:"Задание начато",type:"info"});
+  const startTask=async(t)=>{
+    try{
+      const r=await fetch("/api/actions/task-start",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({taskId:t.id}),
+      });
+      if(!r.ok){
+        const err=await r.json().catch(()=>({}));
+        setToast({message:err.error||"Не удалось начать задание",type:"error"});
+        return;
+      }
+      const data=await r.json();
+      if(data.state)applyServerState(data.state);
+      setToast({message:"Задание начато",type:"info"});
+    }catch(e){
+      setToast({message:"Нет связи с сервером",type:"error"});
+    }
   };
 
   const tColor=s=>s==="завершено"?"success":s==="в работе"?"info":s==="просрочено"?"danger":"primary";
@@ -143,8 +205,8 @@ export default function TasksPage(){
     <div>
       <PageH title="Производственные задания">
         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-          {["all",...TASK_STATUSES].map(s=>(
-            <button key={s} onClick={()=>setFilter(s)} style={{padding:"6px 14px",borderRadius:7,border:`1px solid ${filter===s?C.primary:C.border}`,background:filter===s?C.primaryBg:C.surface,color:filter===s?C.primary:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{s==="all"?"Все":s}</button>
+          {["all","активные",...TASK_STATUSES].map(s=>(
+            <button key={s} onClick={()=>setFilter(s)} style={{padding:"6px 14px",borderRadius:7,border:`1px solid ${filter===s?C.primary:C.border}`,background:filter===s?C.primaryBg:C.surface,color:filter===s?C.primary:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{s==="all"?"Все":s==="активные"?"Активные":s}</button>
           ))}
         </div>
         {canCreate&&<Btn onClick={openNew} icon={<I.plus size={15}/>}>Новое задание</Btn>}
@@ -157,13 +219,17 @@ export default function TasksPage(){
           const tEmps=taskEmployees.filter(te=>te.taskId===t.id);
           const isOverdue=!t.completedAt&&new Date()>new Date(t.deadline)&&t.status!=="завершено"&&t.status!=="просрочено";
           const canAct=isWorker?(t.userIds||[]).includes(currentUser.id):true;
+          const msLeft=new Date(t.deadline).getTime()-Date.now();
+          const hoursLeft=Math.floor(Math.abs(msLeft)/3600000);
+          const dlLabel=t.completedAt?`Завершено: ${fmtShort(t.completedAt)}`:isOverdue?`Просрочено на ${hoursLeft} ч`:msLeft<3600000?`Срок: < 1 ч`:msLeft<86400000?`Срок: ${hoursLeft} ч`:msLeft<172800000?`Срок: завтра`:fmtShort(t.deadline);
+          const dlColor=t.completedAt?C.success:isOverdue?C.danger:msLeft<3600000?C.danger:msLeft<86400000?C.orange:C.dim;
           return(
-            <Card key={t.id} s={{display:"flex",flexDirection:"column",gap:10,padding:"14px 18px",borderLeft:`3px solid ${isOverdue?C.danger:t.status==="завершено"?C.success:t.status==="в работе"?C.info:C.primary}`}}>
+            <Card key={t.id} s={{display:"flex",flexDirection:"column",gap:10,padding:"14px 18px",borderLeft:`3px solid ${isOverdue?C.danger:t.status==="завершено"?C.success:t.status==="в работе"?C.info:C.primary}`,background:isOverdue?`${C.danger}05`:""}}>
               <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:14}}>
                 <div style={{flex:"1 1 200px"}}>
-                  <div style={{fontSize:14,fontWeight:700,color:C.text}}>{prod?.name||"—"} <span style={{fontWeight:400,color:C.muted}}>x{t.quantity}</span></div>
-                  <div style={{fontSize:12,color:C.dim,marginTop:2}}>Создано: {fmtShort(t.createdAt)} · Срок: {fmtShort(t.deadline)}</div>
-                  {t.completedAt&&<div style={{fontSize:11,color:C.dim}}>Завершено: {fmtDate(t.completedAt)}</div>}
+                  <div style={{fontSize:14,fontWeight:700,color:C.text}}>{prod?.name||"\u2014"} <span style={{fontWeight:400,color:C.muted}}>x{t.quantity}</span></div>
+                  <div style={{fontSize:12,color:dlColor,marginTop:2,display:"flex",alignItems:"center",gap:4}}><I.clock size={11}/>{dlLabel}</div>
+                  {t.startedAt&&t.status==="в работе"&&<div style={{fontSize:11,color:C.info,marginTop:1}}>В работе: {Math.floor((Date.now()-new Date(t.startedAt).getTime())/60000)} мин</div>}
                   {t.note&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:2}}>{t.note}</div>}
                 </div>
                 <Badge color={isOverdue?"danger":tColor(t.status)}>{isOverdue?"просрочено":t.status}</Badge>
@@ -217,10 +283,10 @@ export default function TasksPage(){
         <Txa label="Примечание" value={form.note} onChange={e=>setForm({...form,note:e.target.value})}/>
         {rawCheck&&(
           <div style={{background:rawCheck.ok?C.successBg:C.dangerBg,border:`1px solid ${rawCheck.ok?"rgba(90,158,95,.2)":"rgba(196,78,61,.2)"}`,borderRadius:8,padding:12,marginTop:8}}>
-            <div style={{fontSize:13,fontWeight:600,color:rawCheck.ok?C.success:C.danger,marginBottom:6}}>{rawCheck.ok?"✅ Сырья достаточно":"❌ Недостаточно сырья"}</div>
+            <div style={{fontSize:13,fontWeight:600,color:rawCheck.ok?C.success:C.danger,marginBottom:6}}>{rawCheck.ok?"\u2705 Сырья достаточно":"\u274c Недостаточно сырья"}</div>
             {rawCheck.items.map((it,i)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"2px 0",color:it.enough?C.text:C.danger}}>
-                <span>{it.name}</span><span>{it.needed} / {it.available} {it.unit} {it.enough?"✓":"✗"}</span>
+                <span>{it.name}</span><span>{it.needed} / {it.available} {it.unit} {it.enough?"\u2713":"\u2717"}</span>
               </div>
             ))}
           </div>
@@ -268,4 +334,7 @@ export default function TasksPage(){
       {toast&&<Toast {...toast} onClose={()=>setToast(null)}/>}
     </div>
   );
-}
+};
+
+
+export { TasksPage };

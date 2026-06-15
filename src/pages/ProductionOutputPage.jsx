@@ -1,12 +1,15 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ROLES, fmtDate } from "../constants";
-import { Btn, Inp, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card, PageH, SearchBox, Stat } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function ProductionOutputPage(){
-  const {productionOutputs,setProductionOutputs,products,setProducts,inventoryMovements,setInventoryMovements,employeeHistory,setEmployeeHistory,productionPlans,setProductionPlans,users,currentUser,addLog,addNotification}=useContext(AppContext);
+// PRODUCTION OUTPUT PAGE
+const ProductionOutputPage = ()=>{
+  const {productionOutputs,setProductionOutputs,products,users,currentUser,addLog,addNotification,recipes,rawMaterials,setBatches,applyOutput,revertOutput,applyServerState}=useContext(AppContext);
   const role=ROLES.find(r=>r.id===currentUser.roleId);
   const isWorker=role?.name==="worker";
   const workers=users.filter(u=>u.roleId===3&&u.status==="active");
@@ -31,7 +34,9 @@ export default function ProductionOutputPage(){
 
   const list=useMemo(()=>{
     let l=[...(productionOutputs||[])];
-    if(fEmp!=="all") l=l.filter(o=>o.employeeId===+fEmp);
+    // Worker sees only their own records
+    if(isWorker) l=l.filter(o=>o.employeeId===currentUser.id);
+    else if(fEmp!=="all") l=l.filter(o=>o.employeeId===+fEmp);
     if(search){
       const s=search.toLowerCase();
       l=l.filter(o=>{
@@ -41,7 +46,7 @@ export default function ProductionOutputPage(){
       });
     }
     return l.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  },[productionOutputs,fEmp,search,products,users]);
+  },[productionOutputs,fEmp,search,products,users,isWorker,currentUser]);
 
   const openNew=()=>{setEdit(null);setForm(emptyForm);setErrs({});setModal(true)};
   const openEdit=(o)=>{
@@ -59,38 +64,9 @@ export default function ProductionOutputPage(){
     setErrs(e);return!Object.keys(e).length;
   };
 
-  const revertOutput=(out)=>{
-    setProducts(p=>p.map(x=>x.id===out.productId?{...x,stock:Math.max(0,x.stock-out.quantity),updatedAt:new Date().toISOString()}:x));
-    setInventoryMovements(p=>p.filter(m=>m.refId!==`output-${out.id}`));
-    const ds=out.date.slice(0,10);
-    setEmployeeHistory(p=>p.map(h=>h.employeeId===out.employeeId&&h.date===ds?{...h,producedQty:Math.max(0,h.producedQty-out.quantity)}:h));
-    setProductionPlans(p=>p.map(pl=>{
-      if(pl.productId===out.productId&&pl.productionDate===ds&&pl.status!=="отменён"){
-        const nc=Math.max(0,pl.completedQty-out.quantity);
-        return{...pl,completedQty:nc,status:nc>=pl.plannedQty?"выполнен":nc>0?"в процессе":"запланирован"};
-      }return pl;
-    }));
-  };
+  // applyOutput and revertOutput are provided via AppContext (defined in App())
 
-  const applyOutput=(out,stockBefore)=>{
-    const newBalance=stockBefore+out.quantity;
-    setProducts(p=>p.map(x=>x.id===out.productId?{...x,stock:x.stock+out.quantity,updatedAt:new Date().toISOString()}:x));
-    setInventoryMovements(p=>[...p,{id:out.id+0.1,productId:out.productId,type:"output",quantity:out.quantity,balance:newBalance,refId:`output-${out.id}`,createdAt:out.date}]);
-    const ds=out.date.slice(0,10);
-    setEmployeeHistory(p=>{
-      const ex=p.find(h=>h.employeeId===out.employeeId&&h.date===ds);
-      if(ex) return p.map(h=>h.id===ex.id?{...h,producedQty:h.producedQty+out.quantity}:h);
-      return [...p,{id:Date.now()+Math.random(),employeeId:out.employeeId,date:ds,attendance:"present",tasksCompleted:0,producedQty:out.quantity,workStart:"09:00",workEnd:"18:00",comment:""}];
-    });
-    setProductionPlans(p=>p.map(pl=>{
-      if(pl.productId===out.productId&&pl.productionDate===ds&&pl.status!=="отменён"){
-        const nc=Math.min(pl.plannedQty,pl.completedQty+out.quantity);
-        return{...pl,completedQty:nc,status:nc>=pl.plannedQty?"выполнен":"в процессе"};
-      }return pl;
-    }));
-  };
-
-  const save=()=>{
+  const save=async()=>{
     if(!validate()) return;
     const qty=+form.quantity;const productId=+form.productId;const employeeId=+form.employeeId;
     const now=new Date().toISOString();
@@ -98,6 +74,7 @@ export default function ProductionOutputPage(){
     const prod=products.find(p=>p.id===productId);
     const emp=users.find(u=>u.id===employeeId);
     if(edit){
+      // Edit is only accessible to manager/admin (workers see no edit button)
       const stockBefore=edit.productId===productId?Math.max(0,curStock-edit.quantity):curStock;
       revertOutput(edit);
       const newOut={...edit,productId,employeeId,quantity:qty,date:new Date(form.date).toISOString(),comment:form.comment,updatedAt:now};
@@ -105,11 +82,33 @@ export default function ProductionOutputPage(){
       applyOutput(newOut,stockBefore);
       addLog(`Выпуск изменён: ${prod?.name} x${qty} → ${emp?.name?.split(" ").slice(0,2).join(" ")}`);
       setToast({message:"Запись обновлена",type:"success"});
+    } else if(isWorker){
+      // ── Worker path: server action endpoint ──
+      // Workers cannot write manager-only keys, so delegate all derived updates.
+      try{
+        const r=await fetch("/api/actions/output-record",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({productId,employeeId,quantity:qty,date:form.date,comment:form.comment}),
+        });
+        const data=await r.json();
+        if(!r.ok){setToast({message:data.error||"Ошибка сервера",type:"error"});return;}
+        applyServerState(data.state);
+        setToast({message:"Выпуск зафиксирован!",type:"success"});
+      }catch(e){
+        setToast({message:"Нет соединения с сервером",type:"error"});return;
+      }
     } else {
+      // ── Manager / Admin path (unchanged) ──
       const id=Date.now();
-      const newOut={id,productId,employeeId,quantity:qty,date:new Date(form.date).toISOString(),comment:form.comment,createdAt:now,createdBy:currentUser.id};
+      const batchId=id+0.5;
+      const expiresAt=new Date(new Date(form.date).getTime()+7*24*3600*1000).toISOString();
+      // source:"manual" — one output, one batch, no taskId
+      const newOut={id,productId,employeeId,quantity:qty,date:new Date(form.date).toISOString(),comment:form.comment,source:"manual",taskId:null,batchId,createdAt:now,createdBy:currentUser.id};
       setProductionOutputs(p=>[...(p||[]),newOut]);
+      setBatches(p=>[...(p||[]),{id:batchId,productId,quantity:qty,producedAt:new Date(form.date).toISOString(),expiresAt,createdBy:currentUser.id,status:"активна",note:form.comment||"",taskId:null}]);
       applyOutput(newOut,curStock);
+      // Batch created above; applyOutput handles stock/raw/movements/history/plans
       addLog(`Выпуск: ${prod?.name} x${qty} → ${emp?.name?.split(" ").slice(0,2).join(" ")}`);
       addNotification({title:`Выпуск: ${prod?.name} x${qty}`,type:"информация",content:`${emp?.name?.split(" ").slice(0,2).join(" ")} зафиксировал выпуск ${prod?.name} — ${qty} ${prod?.unit}`,targetAll:true});
       setToast({message:"Выпуск зафиксирован!",type:"success"});
@@ -165,9 +164,14 @@ export default function ProductionOutputPage(){
                     <TD>{prod?.name||"—"}</TD>
                     <TD s={{fontWeight:700,color:C.success}}>+{o.quantity} {prod?.unit||""}</TD>
                     <TD s={{color:C.dim,fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.comment||"—"}</TD>
-                    <TD><div style={{display:"flex",gap:4}}>
-                      <Btn v="ghost" sz="sm" onClick={()=>openEdit(o)} icon={<I.edit size={14}/>}/>
-                      <Btn v="ghost" sz="sm" onClick={()=>setConfirm({title:"Удалить выпуск?",message:`Удалить запись "${prod?.name} x${o.quantity}"? Остаток склада будет скорректирован.`,onConfirm:()=>doDelete(o)})} icon={<I.trash size={14}/>}/>
+                    <TD><div style={{display:"flex",gap:4,alignItems:"center"}}>
+                      {o.source==="task"
+                        ? <span style={{fontSize:11,color:C.dim,padding:"3px 7px",background:C.surface2,borderRadius:5,border:`1px solid ${C.border}`}} title="Создан при завершении задания — редактирование через страницу Задания">#{o.taskId}</span>
+                        : !isWorker&&<>
+                            <Btn v="ghost" sz="sm" onClick={()=>openEdit(o)} icon={<I.edit size={14}/>}/>
+                            <Btn v="ghost" sz="sm" onClick={()=>setConfirm({title:"Удалить выпуск?",message:`Удалить запись "${prod?.name} x${o.quantity}"? Остаток склада будет скорректирован.`,onConfirm:()=>doDelete(o)})} icon={<I.trash size={14}/>}/>
+                          </>
+                      }
                     </div></TD>
                   </tr>
                 );
@@ -215,4 +219,7 @@ export default function ProductionOutputPage(){
       {toast&&<Toast {...toast} onClose={()=>setToast(null)}/>}
     </div>
   );
-}
+};
+
+
+export { ProductionOutputPage };

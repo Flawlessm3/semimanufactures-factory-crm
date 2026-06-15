@@ -1,11 +1,14 @@
-import { useContext, useState, useMemo } from "react";
-import { AppContext } from "../context/AppContext";
-import { C } from "../theme";
-import { I } from "../icons";
-import { ROLES, fmtShort } from "../constants";
-import { Badge, Card, Title, PageH } from "../components/ui";
+import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { AppContext } from "../context/AppContext.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { C, CC } from "../theme/colors.js";
+import { I } from "../icons/Icons.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
-export default function WorkerHistoryPage(){
+// WORKER HISTORY PAGE
+const WorkerHistoryPage = ()=>{
   const {users,tasks,taskEmployees,employeeHistory,marks,currentUser,products,productionOutputs}=useContext(AppContext);
   const role=ROLES.find(r=>r.id===currentUser.roleId);
   const isWorker=role?.name==="worker";
@@ -57,7 +60,7 @@ export default function WorkerHistoryPage(){
             <div style={{width:50,height:50,borderRadius:12,background:`linear-gradient(135deg, ${C.primary}25, ${C.primary}10)`,display:"flex",alignItems:"center",justifyContent:"center",color:C.primary,fontWeight:800,fontSize:20,border:`2px solid ${C.primary}30`}}>{worker.name.charAt(0)}</div>
             <div style={{flex:"1 1 200px"}}>
               <div style={{fontSize:17,fontWeight:700,color:C.text}}>{worker.name}</div>
-              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{ROLES.find(r=>r.id===worker.roleId)?.label} · {worker.email}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{ROLES.find(r=>r.id===worker.roleId)?.label} \u00b7 {worker.email}</div>
             </div>
             <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
               <div style={{background:C.bg,borderRadius:8,padding:"8px 14px",textAlign:"center",border:`1px solid ${C.border}`}}>
@@ -86,22 +89,17 @@ export default function WorkerHistoryPage(){
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Дата</th>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Статус</th>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Задания</th>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Произведено</th>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Время</th>
-              <th style={{padding:"10px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#8a8a9a",borderBottom:`1px solid ${C.border}`}}>Комментарий</th>
+              <TH>Дата</TH><TH>Статус</TH><TH>Задания</TH><TH>Произведено</TH><TH>Время</TH><TH>Комментарий</TH>
             </tr></thead>
             <tbody>
               {history.map(h=>(
                 <tr key={h.id} style={{borderBottom:`1px solid ${C.border}`,background:h.attendance==="absent"?C.dangerBg:"transparent"}}>
-                  <td style={{padding:"10px 14px",fontSize:13,fontWeight:500,whiteSpace:"nowrap",color:C.text}}>{h.date}</td>
-                  <td style={{padding:"10px 14px"}}><Badge color={h.attendance==="present"?"success":"danger"}>{h.attendance==="present"?"Был":"Отсутствовал"}</Badge></td>
-                  <td style={{padding:"10px 14px",fontWeight:600,color:C.text}}>{h.attendance==="present"?h.tasksCompleted:"—"}</td>
-                  <td style={{padding:"10px 14px",fontWeight:600,color:C.primary}}>{h.attendance==="present"&&h.producedQty>0?h.producedQty:"—"}</td>
-                  <td style={{padding:"10px 14px",color:C.muted,fontSize:12}}>{h.attendance==="present"&&h.workStart?`${h.workStart}–${h.workEnd}`:"—"}</td>
-                  <td style={{padding:"10px 14px",color:C.dim,fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.comment||"—"}</td>
+                  <TD s={{fontWeight:500,whiteSpace:"nowrap"}}>{h.date}</TD>
+                  <TD><Badge color={h.attendance==="present"?"success":"danger"}>{h.attendance==="present"?"Был":"Отсутствовал"}</Badge></TD>
+                  <TD s={{fontWeight:600}}>{h.attendance==="present"?h.tasksCompleted:"\u2014"}</TD>
+                  <TD s={{fontWeight:600,color:C.primary}}>{h.attendance==="present"&&h.producedQty>0?h.producedQty:"\u2014"}</TD>
+                  <TD s={{color:C.muted,fontSize:12}}>{h.attendance==="present"&&h.workStart?`${h.workStart}\u2013${h.workEnd}`:"\u2014"}</TD>
+                  <TD s={{color:C.dim,fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.comment||"\u2014"}</TD>
                 </tr>
               ))}
             </tbody>
@@ -120,7 +118,7 @@ export default function WorkerHistoryPage(){
             return(
               <div key={te.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{flex:1}}>
-                  <span style={{fontSize:13,fontWeight:500,color:C.text}}>{prod?.name||"—"}</span>
+                  <span style={{fontSize:13,fontWeight:500,color:C.text}}>{prod?.name||"\u2014"}</span>
                   <span style={{fontSize:11,color:C.dim,marginLeft:8}}>Задание #{te.taskId}</span>
                 </div>
                 <Badge color={te.status==="завершено"?"success":"danger"}>{te.producedQty} {prod?.unit||""}</Badge>
@@ -133,4 +131,7 @@ export default function WorkerHistoryPage(){
       </Card>
     </div>
   );
-}
+};
+
+
+export { WorkerHistoryPage };

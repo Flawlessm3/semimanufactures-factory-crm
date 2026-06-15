@@ -1,7 +1,22 @@
-import React, { useEffect } from "react";
-import { C } from "../../theme";
-import { I } from "../../icons";
-import { EthnicBorder } from "../decorative";
+import { useEffect } from "react";
+import { C } from "../../theme/colors.js";
+import { I } from "../../icons/Icons.jsx";
+
+export const EthnicBorder = ({color=C.primary, height=3}) => (
+  <div style={{width:"100%",height,background:`repeating-linear-gradient(90deg, ${color} 0px, ${color} 8px, transparent 8px, transparent 12px, ${color}80 12px, ${color}80 16px, transparent 16px, transparent 24px)`,opacity:0.6,borderRadius:1}}/>
+);
+
+export const EthnicCorner = ({size=20,color=C.primary,position="topLeft"}) => {
+  const s = {position:"absolute",width:size,height:size,opacity:0.25};
+  const pos = position==="topLeft"?{top:-1,left:-1}:position==="topRight"?{top:-1,right:-1}:position==="bottomLeft"?{bottom:-1,left:-1}:{bottom:-1,right:-1};
+  const rotate = position==="topLeft"?"0":position==="topRight"?"90":position==="bottomLeft"?"270":"180";
+  return(
+    <svg style={{...s,...pos,transform:`rotate(${rotate}deg)`}} viewBox="0 0 20 20" fill="none">
+      <path d="M0 0h20v2H2v18H0V0z" fill={color}/>
+      <path d="M4 4h4v2H6v2H4V4z" fill={color}/>
+    </svg>
+  );
+};
 
 export const Badge = ({children,color="primary",s={}}) => {
   const m={primary:{bg:C.primaryBg,c:C.primary},success:{bg:C.successBg,c:C.success},danger:{bg:C.dangerBg,c:C.danger},info:{bg:C.infoBg,c:C.info},purple:{bg:C.purpleBg,c:C.purple},cyan:{bg:C.cyanBg,c:C.cyan},pink:{bg:C.pinkBg,c:C.pink},orange:{bg:C.orangeBg,c:C.orange}};

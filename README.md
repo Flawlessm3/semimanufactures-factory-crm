@@ -1,16 +1,142 @@
-# React + Vite
+# Dikanish — Система управления пищевым производством
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Операционная CRM для жёсткого ежедневного контроля пищевого производства. Не просто учёт — персональный микроменеджмент смены, выработки, начислений, брака, партий и долгов магазинов.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Назначение
 
-## React Compiler
+Директор и менеджер за 10 секунд видят:
+- кто пришёл и кто не пришёл
+- кто взял задание, кто сколько сделал, кто не выполнил норму
+- что начислено, что удержано, что перенесено
+- какие магазины должны деньги и кто в чёрном списке
+- где брак, просрочка, избыток продукции
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## Роли доступа
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+| Роль | ID | Что видит |
+|------|----|-----------|
+| admin | 1 | всё |
+| manager | 2 | производство, склад, магазины, посещаемость, расчёт |
+| worker | 3 | свои задания, выпуск, посещаемость, история |
+| owner | 4 | всё (как admin) |
+
+Роль доступа НЕ равна должности. Должность — отдельное поле карточки сотрудника.
+
+## Должности
+
+`лепщица`, `фасовщица`, `грузчик`, `курьер`, `торговый представитель`, `техничка`, `завхоз`, `менеджер цеха`, `другое`
+
+---
+
+## Страницы
+
+| Страница | Роль | Назначение |
+|----------|------|------------|
+| Главная | все | Снимок смены: кто пришёл, норма/факт, долги, просрочка |
+| Задания | все | Создание, самозахват, выполнение |
+| Товары | все | Каталог со складом |
+| Выпуск | все | Фиксация выработки — создаёт партию, списывает сырьё |
+| Планирование | admin/manager | Производственные планы |
+| Партии | admin/manager | Срок годности, списание |
+| Брак | admin/manager | Фиксация брака со списанием со склада |
+| Сырьё | admin/manager | Складской учёт |
+| Поставки | admin/manager | Входящее сырьё |
+| Магазины | admin/manager | Карточки, статус, blacklist |
+| Долги магазинов | admin/manager | Задолженности, частичные оплаты |
+| Расчёт оплаты | admin/manager | Еженедельно: норма/факт/статус выплаты |
+| Посещаемость | все | Приход/уход/опоздание |
+| История | все | Личная история выработки |
+| Журнал | admin | Лог действий |
+
+---
+
+## Логика расчёта оплаты
+
+Три типа (`payType`): `сдельная`, `фиксированная`, `смешанная`
+
+| Поле | Смысл |
+|------|-------|
+| `dailyNorm` | Производственная норма (ед./день) — только для сравнения |
+| `fixedDayRate` | Денежная ставка (₽/день) для фикс/смешанной |
+| `pieceRate` | Сдельная ставка (₽/ед.) |
+| `baseSalary` | Месячный оклад (делится на 4.33 для недели) |
+
+Статусы: `начислено → подтверждено к выплате → выплачено`, также `удержано`, `перенесено`
+
+---
+
+## Логика партий
+
+При фиксации выпуска автоматически:
+1. Увеличивается `product.stock`
+2. Списывается сырьё по рецептуре
+3. Создаётся партия с `producedAt` и `expiresAt` (+7 дней)
+
+При редактировании/удалении — всё откатывается (включая сырьё и партию).
+
+---
+
+## Логика брака
+
+- `affectsStock: true` — уменьшает остаток товара и партии, создаёт движение `списание-брак`
+- `affectsStock: false` — только журнал, склад не меняется
+
+---
+
+## Долги магазинов
+
+- Привязаны к магазину, не к сотруднику
+- Частичные оплаты с историей
+- Blacklist блокирует новые заказы
+
+---
+
+## Запуск
+
+```bash
+npm install
+npm run dev      # разработка
+npm run build    # сборка
+node server.js   # сервер
+```
+
+### Тестовые аккаунты
+
+| Роль | Email | Пароль |
+|------|-------|--------|
+| Директор | director@factory.ru | director123 |
+| Менеджер | manager@factory.ru | manager123 |
+| Работник | worker@factory.ru | worker123 |
+| Владелец | owner@factory.ru | owner123 |
+
+---
+
+## Стек
+
+React 19 · Vite · Recharts · Node.js · Express · SQLite (better-sqlite3 v12) · PM2
+
+---
+
+## Windows: ошибка native binding (better_sqlite3.node)
+
+Если при запуске видишь `Could not locate the bindings file ... better_sqlite3.node`:
+
+1. Останови все Node-процессы.
+2. Убедись что npm-скрипты не отключены:
+   ```
+   npm config set ignore-scripts false
+   ```
+3. Удали `node_modules` и `package-lock.json`.
+4. Запусти `npm install` — пересоберёт нативный бинарник.
+5. Если ошибка повторяется, установи Visual Studio Build Tools:
+   `C:\Program Files\nodejs\install_tools.bat`
+   или скачай **Visual Studio Build Tools → Desktop development with C++**.
+6. Затем:
+   ```
+   npm rebuild better-sqlite3
+   npm run dev
+   ```
