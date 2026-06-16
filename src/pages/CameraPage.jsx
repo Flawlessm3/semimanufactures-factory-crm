@@ -6,7 +6,7 @@ import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDE
 import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
 import { C, CC } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
-import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
+import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox, IconBox } from "../components/ui/index.jsx";
 
 // CAMERAS
 
@@ -273,26 +273,36 @@ const CameraTile = ({cam, onFullscreen}) => {
   const isAvailable = cam.enabled;
   return (
     <div
-      style={{position:"relative",background:"#080604",borderRadius:10,overflow:"hidden",border:`1px solid ${isAvailable?"rgba(255,255,255,0.08)":"rgba(196,78,61,0.2)"}`,cursor:"pointer",aspectRatio:"16/9"}}
+      className="camera-card"
+      style={{
+        position:"relative",background:"#080604",borderRadius:14,overflow:"hidden",
+        border:`1px solid ${isAvailable?"rgba(255,255,255,0.10)":"rgba(255,107,95,0.25)"}`,
+        cursor:"pointer",minHeight:280,aspectRatio:"16/9",
+      }}
       onDoubleClick={()=>onFullscreen(cam)}
     >
       <CameraFeed cam={cam}/>
-      {/* Bottom overlay */}
-      <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.75))",padding:"20px 10px 8px",pointerEvents:"none"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
-          <div>
-            <div style={{fontSize:12,fontWeight:700,color:"#fff",lineHeight:1.2}}>{cam.name}</div>
-            <div style={{fontSize:10,color:"rgba(255,255,255,0.5)"}}>{cam.zone}</div>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:4}}>
-            <div style={{width:6,height:6,borderRadius:"50%",background:isAvailable?"#52C97A":"#C44E3D",boxShadow:isAvailable?"0 0 5px #52C97A":"none"}}/>
-            <span style={{fontSize:9,color:isAvailable?"rgba(82,201,122,0.8)":"rgba(196,78,61,0.8)"}}>{isAvailable?"ONLINE":"OFFLINE"}</span>
-          </div>
+      <div className="camera-overlay-top" style={{
+        position:"absolute",top:0,left:0,right:0,padding:14,
+        background:"linear-gradient(to bottom, rgba(0,0,0,.58), transparent)",
+        display:"flex",justifyContent:"space-between",alignItems:"flex-start",pointerEvents:"none",zIndex:6,
+      }}>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 8px",borderRadius:8,background:"rgba(0,0,0,.35)"}}>
+          <div style={{width:7,height:7,borderRadius:"50%",background:"#ff3a3a",boxShadow:"0 0 6px rgba(255,58,58,.6)"}}/>
+          <span style={{fontSize:10,color:"rgba(255,255,255,.75)",fontFamily:"monospace",letterSpacing:1}}>REC</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px",borderRadius:8,background:"rgba(0,0,0,.35)"}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:isAvailable?"#74D889":"#FF6B5F"}}/>
+          <span style={{fontSize:10,color:isAvailable?"rgba(116,216,137,.9)":"rgba(255,107,95,.9)",fontWeight:600}}>{isAvailable?"ONLINE":"OFFLINE"}</span>
         </div>
       </div>
-      {/* Fullscreen hint */}
-      <div style={{position:"absolute",top:8,right:8,opacity:0,transition:"opacity .2s",pointerEvents:"none"}} className="cam-fs-hint">
-        <div style={{background:"rgba(0,0,0,0.6)",borderRadius:4,padding:"3px 6px",fontSize:9,color:"rgba(255,255,255,0.6)"}}>2× клик — полный экран</div>
+      <div className="camera-overlay-bottom" style={{
+        position:"absolute",bottom:0,left:0,right:0,padding:"28px 14px 14px",
+        background:"linear-gradient(to top, rgba(0,0,0,.72), transparent)",
+        pointerEvents:"none",zIndex:6,
+      }}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text,lineHeight:1.3,marginBottom:4}}>{cam.name}</div>
+        <div style={{fontSize:11,color:C.muted}}>{cam.zone || "Цех"} · Камера #{cam.id} · {year}</div>
       </div>
     </div>
   );
@@ -459,8 +469,9 @@ const CameraPage = () => {
           </div>
         )}
         {form.type==="hls"&&(
-          <div style={{padding:"8px 12px",background:"rgba(91,141,181,0.08)",border:"1px solid rgba(91,141,181,0.2)",borderRadius:7,fontSize:11,color:C.info,marginBottom:8}}>
-            ℹ HLS (.m3u8) воспроизводится нативно в Safari. В Chrome/Firefox требуется прокси с поддержкой HLS или конвертация.
+          <div style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 12px",background:"rgba(91,141,181,0.08)",border:"1px solid rgba(91,141,181,0.2)",borderRadius:7,fontSize:11,color:C.info,marginBottom:8}}>
+            <IconBox tone="info" size={28}><I.alert size={14}/></IconBox>
+            <span>HLS (.m3u8) воспроизводится нативно в Safari. В Chrome/Firefox требуется прокси с поддержкой HLS или конвертация.</span>
           </div>
         )}
         {form.type!=="demo"&&(

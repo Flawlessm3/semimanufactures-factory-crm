@@ -1,29 +1,41 @@
 import { useState, useMemo, useContext } from "react";
+import { motion } from "motion/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
 import { AppContext } from "../context/AppContext.js";
 import { ROLES } from "../constants/index.js";
-import { fmtShort } from "../utils/dates.js";
-import { C, CC, chartTooltipStyle } from "../theme/colors.js";
+import { getJobProfile, isSuperAdmin } from "../utils/roles.js";
+import { packingProgress } from "../utils/orders.js";
+import { fmtShort, relTime } from "../utils/dates.js";
+import { formatMoney, formatMoneyCompact } from "../utils/formatters.js";
+import { C, CC } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
-import { Badge, Btn, Stat, Card, Title, PageH, MetricCard } from "../components/ui/index.jsx";
+import { pickMicrolog, micrologLabel, isAuthLogMessage, formatMicrologEntry } from "../utils/activityLog.js";
+import { Badge, Btn, Stat, Card, Title, PageH, AnimatedNumber, IconBox } from "../components/ui/index.jsx";
+import { ExpandableMetricStrip } from "../components/ui/ExpandableMetricStrip.jsx";
+import { GlassChartTooltip } from "../components/charts/GlassChartTooltip.jsx";
+import { stagger, listItem, fadeUp, softScale, spring } from "../motion/presets.js";
+import { useAppMotion } from "../motion/MotionProvider.jsx";
 
 const DashboardPage = () => {
   const {
     products, users, currentUser, tasks, rawMaterials, notifications, marks, taskEmployees, recipes,
-    clientOrders, clients, setPage, hiddenWarnings, setHiddenWarnings,
-    productionOutputs, batches, debts, defects, applyServerState,
+    clientOrders, clients, setPage,
+    productionOutputs, batches, debts, defects, applyServerState, logs,
   } = useContext(AppContext);
 
   const ap = products.filter(p => !p.deleted);
   const role = ROLES.find(r => r.id === currentUser.roleId);
+  const jobProfile = getJobProfile(currentUser);
   const canSeeFinance = role?.name !== "worker";
   const isWorker = role?.name === "worker";
-  const isAdmin = role?.name === "admin" || role?.name === "owner";
+  const isAdmin = isSuperAdmin(currentUser);
   const isManager = role?.name === "manager";
+  const isPacker = jobProfile === "packer";
+  const isCourier = jobProfile === "courier";
+  const isLepstitsa = jobProfile === "lepstitsa";
   const todayStr = new Date().toISOString().slice(0, 10);
-  const [selectedWarns, setSelectedWarns] = useState(new Set());
-  const [showHidden, setShowHidden] = useState(false);
   const [chartPeriod, setChartPeriod] = useState(14);
+  const { reduceMotion } = useAppMotion();
 
   const todayTasks = tasks.filter(t => t.completedAt && t.completedAt.startsWith(todayStr));
   const todayProduced = todayTasks.reduce((s, t) => s + t.quantity, 0);
@@ -86,6 +98,7 @@ const DashboardPage = () => {
   }, [tasks]);
 
   const chartData = prodByDay.slice(-chartPeriod);
+  const chartAnim = !reduceMotion && chartData.length <= 80;
 
   const rawStockData = rawMaterials.slice(0, 8).map(r => ({ name: r.name.length > 10 ? r.name.slice(0, 10) + "…" : r.name, stock: r.stock, min: r.minStock }));
 
@@ -100,17 +113,6 @@ const DashboardPage = () => {
     }).sort((a, b) => b.produced - a.produced);
   }, [allWorkers, tasks, taskEmployees, productionOutputs]);
 
-  const warnings = [];
-  criticalRaw.forEach(r => warnings.push({ key: `raw-${r.id}`, type: "danger", icon: <I.alert size={14} />, text: `Сырьё: ${r.name} — ${r.stock} ${r.unit}` }));
-  lowProducts.forEach(p => warnings.push({ key: `prod-${p.id}`, type: "warning", icon: <I.box size={14} />, text: `Товар: ${p.name} — ${p.stock} ${p.unit}` }));
-  overdueTasks.forEach(t => { const pr = products.find(p => p.id === t.productId); warnings.push({ key: `task-${t.id}`, type: "danger", icon: <I.clock size={14} />, text: `Просрочено #${t.id}: ${pr?.name || "?"} x${t.quantity}` }); });
-  absentWorkers.forEach(w => warnings.push({ key: `absent-${w.id}`, type: "warning", icon: <I.user size={14} />, text: `${w.name.split(" ").slice(0, 2).join(" ")} не отметил присутствие` }));
-
-  const visibleWarnings = warnings.filter(w => !hiddenWarnings.has(w.key));
-  const hiddenWarningsList = warnings.filter(w => hiddenWarnings.has(w.key));
-  const toggleWarn = (key) => setSelectedWarns(p => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
-  const hideSelected = () => { setHiddenWarnings(p => { const n = new Set(p); selectedWarns.forEach(k => n.add(k)); return n }); setSelectedWarns(new Set()); };
-  const hideAll = () => { setHiddenWarnings(p => { const n = new Set(p); warnings.forEach(w => n.add(w.key)); return n }); setSelectedWarns(new Set()); };
 
   const expiredBatches = (batches || []).filter(b => b.status === "активна" && b.expiresAt && new Date(b.expiresAt) < new Date());
   const nearExpiryBatches = useMemo(() => {
@@ -162,12 +164,140 @@ const DashboardPage = () => {
     return (p[a.priority] ?? 2) - (p[b.priority] ?? 2) || new Date(a.orderDate) - new Date(b.orderDate);
   });
 
+  const packingOrders = clientOrders.filter(o => !o.deleted && !["отгружен", "отменён"].includes(o.status));
+  const deliveryReady = packingOrders.filter(o => o.packingStatus === "готов к доставке" || o.status === "готов");
+
+  const packingWaiting = packingOrders.filter(o => (o.packingStatus || "не начата") === "не начата").length;
+  const packingActive = packingOrders.filter(o => o.packingStatus === "фасуется").length;
+  const deliveryReadyCount = deliveryReady.length;
+  const deliveryActive = clientOrders.filter(o => o.deliveryStatus === "в доставке").length;
+
+  const heroMetrics = useMemo(() => {
+    const items = [
+      { id: "activeTasks", label: "Активные задания", value: activeTasks, tone: "primary" },
+      { id: "urgentOrders", label: "Срочные заказы", value: urgentOrders, tone: urgentOrders > 0 ? "danger" : "neutral" },
+      { id: "packing", label: "В фасовке", value: packingActive, tone: "warning" },
+      { id: "readyDelivery", label: "Готово к доставке", value: deliveryReadyCount, tone: "purple" },
+      { id: "lowRaw", label: "Сырьё ниже мин.", value: criticalRaw.length, tone: criticalRaw.length > 0 ? "danger" : "success" },
+    ];
+    if (canSeeFinance && totalActiveDebt > 0) {
+      items.push({
+        id: "activeDebt",
+        label: "Активный долг",
+        value: formatMoneyCompact(totalActiveDebt),
+        fullValue: formatMoney(totalActiveDebt),
+        tone: "danger",
+      });
+    }
+    if (canSeeFinance && totalActiveDebt === 0) {
+      items.push({
+        id: "stock",
+        label: "Склад",
+        value: formatMoneyCompact(totalValue),
+        fullValue: formatMoney(totalValue),
+        subtitle: "остаток готовой продукции",
+        tone: "primary",
+      });
+    }
+    return items;
+  }, [activeTasks, urgentOrders, packingActive, deliveryReadyCount, criticalRaw.length, canSeeFinance, totalActiveDebt, totalValue]);
+
+  const microlog = useMemo(() => pickMicrolog(logs, 8), [logs]);
+  const micrologTitle = useMemo(() => micrologLabel(logs), [logs]);
+
+  const logTone = (msg) => {
+    const m = (msg || "").toLowerCase();
+    if (isAuthLogMessage(m)) return "neutral";
+    if (m.includes("задан")) return "primary";
+    if (m.includes("заказ") || m.includes("отгруз")) return "purple";
+    if (m.includes("фасов")) return "warning";
+    if (m.includes("достав")) return "info";
+    if (m.includes("оплат") || m.includes("долг")) return "success";
+    if (m.includes("склад") || m.includes("сырь") || m.includes("постав")) return "info";
+    if (m.includes("удал")) return "danger";
+    return "neutral";
+  };
+
+  const logIcon = (msg) => {
+    const m = (msg || "").toLowerCase();
+    if (m.includes("вход")) return <I.login size={14} />;
+    if (m.includes("выход")) return <I.logout size={14} />;
+    if (m.includes("задан")) return <I.tasks size={14} />;
+    if (m.includes("заказ") || m.includes("отгруз")) return <I.send size={14} />;
+    if (m.includes("склад") || m.includes("сырь") || m.includes("постав")) return <I.box size={14} />;
+    if (m.includes("фасов") || m.includes("достав")) return <I.truck size={14} />;
+    if (m.includes("оплат") || m.includes("долг")) return <I.chart size={14} />;
+    if (m.includes("удал") || m.includes("корзин")) return <I.trash size={14} />;
+    return <I.clock size={14} />;
+  };
+
+
+  if (isPacker) {
+    return (
+      <div className="dashboard-page" style={{ animation: "softFadeIn .4s ease" }}>
+        <PageH title="Фасовка сегодня" sub={fmtShort(new Date().toISOString())}>
+          <Btn onClick={() => setPage("packing")} icon={<I.box size={14} />}>Открыть фасовку</Btn>
+        </PageH>
+        <div className="kpi-row" style={{ marginBottom: 16 }}>
+          <Stat icon={<I.box size={18} />} label="Ждут фасовки" value={packingOrders.filter(o => (o.packingStatus || "не начата") === "не начата").length} color={C.info} />
+          <Stat icon={<I.factory size={18} />} label="Фасуются" value={packingOrders.filter(o => o.packingStatus === "фасуется").length} color={C.orange} />
+          <Stat icon={<I.check size={18} />} label="Готовы" value={deliveryReady.length} color={C.success} />
+          <Stat icon={<I.alert size={18} />} label="Срочные" value={packingOrders.filter(o => o.priority === "срочный").length} color={C.danger} />
+        </div>
+        <Card>
+          <Title>Очередь фасовки</Title>
+          {packingOrders.slice(0, 8).map(o => {
+            const cl = clients.find(c => c.id === o.clientId);
+            const prog = packingProgress(o.items);
+            return (
+              <div key={o.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{cl?.name || "—"}</div>
+                  <div style={{ fontSize: 11, color: C.dim }}>{prog.done}/{prog.total} позиций · {o.packingStatus || "не начата"}</div>
+                </div>
+                <Btn sz="sm" onClick={() => setPage("packing")}>Открыть</Btn>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+    );
+  }
+
+  if (isCourier) {
+    const mine = clientOrders.filter(o => o.courierId === currentUser.id && o.deliveryStatus === "в доставке");
+    return (
+      <div className="dashboard-page" style={{ animation: "softFadeIn .4s ease" }}>
+        <PageH title="Доставка сегодня" sub={fmtShort(new Date().toISOString())}>
+          <Btn onClick={() => setPage("delivery")} icon={<I.truck size={14} />}>Открыть доставку</Btn>
+        </PageH>
+        <div className="kpi-row" style={{ marginBottom: 16 }}>
+          <Stat icon={<I.check size={18} />} label="Готовы" value={deliveryReady.length} color={C.success} />
+          <Stat icon={<I.truck size={18} />} label="У меня" value={mine.length} color={C.purple} />
+          <Stat icon={<I.alert size={18} />} label="Срочные" value={clientOrders.filter(o => o.priority === "срочный" && o.deliveryStatus !== "доставлен").length} color={C.danger} />
+        </div>
+        <Card onClick={() => setPage("delivery")} s={{ cursor: "pointer" }}>
+          <Title>Мои доставки</Title>
+          {mine.length === 0 ? <div style={{ color: C.dim, fontSize: 13, padding: 16, textAlign: "center" }}>Нет активных доставок</div> :
+            mine.map(o => {
+              const cl = clients.find(c => c.id === o.clientId);
+              return <div key={o.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.06)", fontSize: 13 }}>{cl?.name} · {o.addressSnapshot || cl?.address}</div>;
+            })}
+        </Card>
+      </div>
+    );
+  }
+
   // Worker view
   if (isWorker) {
     return (
       <div className="dashboard-page" style={{ animation: "softFadeIn .4s ease" }}>
-        <PageH title={`Моя смена, ${currentUser.name.split(" ")[1] || currentUser.name} 👋`} sub={fmtShort(new Date().toISOString())}>
-          <Btn onClick={() => setPage("prodOutput")} icon={<I.factory size={14} />}>Выпуск</Btn>
+        <PageH title={isLepstitsa ? "Моя смена" : `Моя смена, ${currentUser.name.split(" ")[1] || currentUser.name}`} sub={fmtShort(new Date().toISOString())}>
+          {isLepstitsa ? (
+            <Btn onClick={() => setPage("tasks")} icon={<I.tasks size={14} />}>Мои задания</Btn>
+          ) : (
+            <Btn onClick={() => setPage("prodOutput")} icon={<I.factory size={14} />}>Выпуск</Btn>
+          )}
         </PageH>
 
         {!attendanceMarked && (
@@ -233,111 +363,75 @@ const DashboardPage = () => {
     );
   }
 
-  // Admin / manager / owner view
-  const ShiftBlock = (isAdmin || isManager) && (() => {
-    const now = new Date();
+  // Admin / manager attendance summary (compact — for sidebar rail)
+  const attendanceRail = (isAdmin || isManager) && (() => {
     const arrivedIds = new Set(marks.filter(m => (m.type === "приход" || m.markType === "присутствие") && (m.time || m.createdAt || "").startsWith(todayStr)).map(m => m.employeeId));
     const departedIds = new Set(marks.filter(m => m.type === "уход" && (m.time || m.createdAt || "").startsWith(todayStr)).map(m => m.employeeId));
-    const lateIds = new Set(marks.filter(m => m.type === "опоздание" && (m.time || m.createdAt || "").startsWith(todayStr)).map(m => m.employeeId));
     const absentIds = new Set(marks.filter(m => m.type === "отсутствие" && (m.time || m.createdAt || "").startsWith(todayStr)).map(m => m.employeeId));
-    const todayOutputByWorker = {};
-    (productionOutputs || []).filter(o => o.date.startsWith(todayStr)).forEach(o => { todayOutputByWorker[o.employeeId] = (todayOutputByWorker[o.employeeId] || 0) + o.quantity; });
     const prodWorkers = users.filter(u => u.roleId === 3 && u.status === "active");
     const noShowWorkers = prodWorkers.filter(w => !arrivedIds.has(w.id) && !absentIds.has(w.id));
-    const blacklistedStores = (clients || []).filter(c => c.status === "blacklist");
-    const todayDefects = (defects || []).filter(d => d.date === todayStr);
-    const hasCritical = noShowWorkers.length > 0 || expiredBatches.length > 0 || blacklistedStores.length > 0;
+    const finishedCount = prodWorkers.filter(w => arrivedIds.has(w.id) && departedIds.has(w.id)).length;
 
     return (
-      <div style={{ marginBottom: 0 }}>
-        {hasCritical && (
-          <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-            {noShowWorkers.map(w => (
-              <div key={w.id} className="risk-row" style={{ background: C.dangerBg, borderColor: `${C.danger}30` }}>
-                <I.user size={14} style={{ color: C.danger }} />
-                <span style={{ fontSize: 13, color: C.danger, fontWeight: 700, flex: 1 }}>{w.name} — не отметил приход</span>
-              </div>
-            ))}
-            {expiredBatches.map(b => {
-              const p = products.find(x => x.id === b.productId);
-              return (
-                <div key={b.id} className="risk-row" style={{ background: C.dangerBg, borderColor: `${C.danger}30` }}>
-                  <I.alert size={14} style={{ color: C.danger }} />
-                  <span style={{ fontSize: 13, color: C.danger, fontWeight: 700, flex: 1 }}>Просрочено: {p?.name || "?"} — {b.quantity} ед.</span>
-                  <Btn v="danger" sz="sm" onClick={() => setPage("batches")}>Списать</Btn>
+      <Card variant="data" className="dashboard-card dashboard-attendance-widget">
+        <div className="dashboard-attendance-header">
+          <h3 className="dashboard-attendance-title">Посещаемость</h3>
+          <button type="button" onClick={() => setPage("marks")} className="dashboard-card-action dashboard-attendance-link">Открыть →</button>
+        </div>
+        <div className="dashboard-attendance-stats">
+          <div className="attendance-mini-stat">
+            <div className="attendance-mini-stat-value" style={{ color: C.success }}>{arrivedIds.size}</div>
+            <div className="attendance-mini-stat-label">пришли</div>
+          </div>
+          <div className="attendance-mini-stat">
+            <div className="attendance-mini-stat-value" style={{ color: noShowWorkers.length > 0 ? C.orange : C.dim }}>{noShowWorkers.length}</div>
+            <div className="attendance-mini-stat-label">не отметились</div>
+          </div>
+          <div className="attendance-mini-stat">
+            <div className="attendance-mini-stat-value" style={{ color: C.info }}>{finishedCount}</div>
+            <div className="attendance-mini-stat-label">завершили</div>
+          </div>
+        </div>
+        {noShowWorkers.length > 0 && (
+          <div className="dashboard-attendance-alert">
+            <div className="dashboard-attendance-alert-title">Не отметили приход</div>
+            <div className="dashboard-attendance-alert-list">
+              {noShowWorkers.slice(0, 5).map(w => (
+                <div key={w.id} className="dashboard-attendance-alert-row">
+                  <span className="dashboard-attendance-alert-dot" />
+                  <span className="dashboard-attendance-alert-text">
+                    {w.name.split(" ").slice(0, 2).join(" ")}
+                    <span className="dashboard-attendance-alert-hint"> · приход не отмечен</span>
+                  </span>
                 </div>
-              );
-            })}
-            {blacklistedStores.map(s => (
-              <div key={s.id} className="risk-row" style={{ background: C.orangeBg, borderColor: `${C.orange}30` }}>
-                <I.lock size={14} style={{ color: C.orange }} />
-                <span style={{ fontSize: 13, color: C.orange, fontWeight: 700, flex: 1 }}>ЧС: {s.name}</span>
-              </div>
-            ))}
+              ))}
+            </div>
+            {noShowWorkers.length > 5 && (
+              <div className="dashboard-attendance-alert-more">+ ещё {noShowWorkers.length - 5}</div>
+            )}
           </div>
         )}
-        <Card>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, color: C.text, display: "flex", alignItems: "center", gap: 8 }}><I.clock size={15} /> Смена сегодня</div>
-            <div style={{ display: "flex", gap: 10, fontSize: 11, color: C.dim }}>
-              <span><span style={{ color: C.success, fontWeight: 700 }}>{arrivedIds.size}</span> пришли</span>
-              <span><span style={{ color: C.danger, fontWeight: 700 }}>{noShowWorkers.length}</span> не отмечено</span>
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
-            {prodWorkers.map(w => {
-              const arrived = arrivedIds.has(w.id);
-              const departed = departedIds.has(w.id);
-              const late = lateIds.has(w.id);
-              const absent = absentIds.has(w.id);
-              const produced = todayOutputByWorker[w.id] || 0;
-              const norm = w.dailyNorm || 0;
-              const normOk = norm === 0 || produced >= norm;
-              const statusClr = absent ? C.dim : !arrived ? C.danger : late ? C.orange : C.success;
-              const statusLabel = absent ? "отсутствует" : !arrived ? "не пришёл" : late ? "опоздал" : "пришёл";
-              return (
-                <div key={w.id} style={{ padding: "9px 12px", borderRadius: 12, background: "rgba(0,0,0,.2)", border: `1px solid ${!arrived && !absent ? C.danger + "35" : C.border}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{w.name.split(" ").slice(0, 2).join(" ")}</div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: statusClr }}>{statusLabel}{departed && <div style={{ color: C.info }}>ушёл</div>}</div>
-                  </div>
-                  {(arrived || produced > 0) && norm > 0 && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                      <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,.08)", borderRadius: 2 }}>
-                        <div style={{ height: "100%", width: `${Math.min(100, Math.round(produced / norm * 100))}%`, background: normOk ? C.success : C.orange, borderRadius: 2 }} />
-                      </div>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: normOk ? C.success : C.orange }}>{produced}/{norm}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {(activeDebts.length > 0 || todayDefects.length > 0) && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,.08)" }}>
-              {activeDebts.length > 0 && <button onClick={() => setPage("debts")} style={{ fontSize: 11, color: C.danger, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>{activeDebts.length} магазинов в долгу</button>}
-              {todayDefects.length > 0 && <button onClick={() => setPage("defects")} style={{ fontSize: 11, color: C.orange, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>Брак сегодня: {todayDefects.reduce((s, d) => s + d.quantity, 0)} ед.</button>}
-            </div>
-          )}
-        </Card>
-      </div>
+      </Card>
     );
   })();
 
   return (
-    <div className="dashboard-page" style={{ animation: "softFadeIn .4s ease" }}>
-      <PageH title={`Привет, ${currentUser.name.split(" ")[1] || currentUser.name} 👋`} sub={`${role?.label} · ${fmtShort(new Date().toISOString())}`}>
+    <motion.div className="dashboard-page" variants={stagger} initial="hidden" animate="show">
+      <motion.div variants={fadeUp}>
+      <PageH title={isSuperAdmin(currentUser) || isManager ? "Сводка смены" : `Привет, ${currentUser.name.split(" ")[1] || currentUser.name}`} sub={isSuperAdmin(currentUser) || isManager ? "Смена, заказы, фасовка и риски сегодня" : `${role?.label} · ${fmtShort(new Date().toISOString())}`}>
         <Btn onClick={() => setPage("tasks")} icon={<I.plus size={14} />}>Задание</Btn>
         <Btn v="secondary" onClick={() => setPage("prodOutput")} icon={<I.factory size={14} />}>Выпуск</Btn>
       </PageH>
+      </motion.div>
 
       <div className="dashboard-grid">
         <section className="dashboard-main">
+          <motion.div variants={softScale} whileHover={reduceMotion ? undefined : { y: -2 }} transition={spring.soft}>
           <Card hero>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
               <div>
-                <div className="eyebrow">Операционный обзор</div>
-                <div className="hero-number">{todayProduced} ед.</div>
+                <div className="eyebrow">Сегодня</div>
+                <div className="hero-number"><AnimatedNumber value={todayProduced} suffix=" ед." /></div>
                 <div className="hero-sub">произведено сегодня</div>
               </div>
               <div className="period-tabs">
@@ -346,9 +440,13 @@ const DashboardPage = () => {
                 ))}
               </div>
             </div>
-            {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={160}>
-                <AreaChart data={chartData}>
+            <div className="hero-metric-strip-wrap">
+              <ExpandableMetricStrip metrics={heroMetrics} className="hero-metric-strip" />
+            </div>
+            {chartData.length > 1 ? (
+              <div className="hero-chart-wrap">
+              <ResponsiveContainer width="100%" height={140}>
+                <AreaChart data={chartData} style={{ background: "transparent" }}>
                   <defs>
                     <linearGradient id="gHero" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={C.primary} stopOpacity={0.35} />
@@ -358,35 +456,68 @@ const DashboardPage = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.06)" />
                   <XAxis dataKey="date" tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip contentStyle={chartTooltipStyle} />
-                  <Area type="monotone" dataKey="qty" stroke={C.primary} fill="url(#gHero)" strokeWidth={2} name="Кол-во" />
+                  <Tooltip content={<GlassChartTooltip />} />
+                  <Area type="monotone" dataKey="qty" stroke={C.primary} fill="url(#gHero)" strokeWidth={2} name="Кол-во" isAnimationActive={chartAnim} animationDuration={900} animationEasing="ease-out" />
                 </AreaChart>
               </ResponsiveContainer>
+              </div>
             ) : (
-              <div style={{ textAlign: "center", padding: "32px 0", color: C.dim, fontSize: 13 }}>Данных пока недостаточно</div>
+              <div className="chart-empty-state">
+                <I.chart size={22} style={{ color: C.dim, opacity: 0.6 }} />
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>Недостаточно данных для графика</div>
+                <div style={{ fontSize: 11, color: C.dim, maxWidth: 280 }}>Добавьте выпуск за несколько дней, чтобы увидеть динамику</div>
+              </div>
             )}
-            <div className="hero-mini-grid">
-              <MetricCard label="Активные задания" value={activeTasks} color={C.info} />
-              <MetricCard label="Работают" value={`${busyCount}/${allWorkers.length}`} color={busyCount > 0 ? C.primary : C.dim} />
-              {bestWorker && <MetricCard label={`Лучший: ${bestWorker.name}`} value={bestWorker.produced} color={C.primary} />}
-              <MetricCard label="Непрочитанные" value={unreadNotifs} color={unreadNotifs > 0 ? C.danger : C.dim} />
-              {canSeeFinance && <MetricCard label="Склад" value={`${(totalValue / 1000).toFixed(0)}т ₽`} color={C.cyan} />}
-            </div>
           </Card>
+          </motion.div>
 
-          <div className="kpi-row">
+          <motion.div variants={fadeUp} whileHover={reduceMotion ? undefined : { y: -2 }} transition={spring.soft}>
+          <Card variant="data" className="dashboard-card activity-card activity-section">
+            <div className="dashboard-card-header">
+              <div className="dashboard-card-title-group">
+                <div className="dashboard-card-title">{micrologTitle}</div>
+                <div className="dashboard-card-subtitle">Последние операционные события смены</div>
+              </div>
+              <button type="button" onClick={() => setPage("logs")} className="dashboard-card-action">Журнал →</button>
+            </div>
+            {microlog.length === 0 ? (
+              <div style={{ display: "grid", placeItems: "center", minHeight: 220, color: C.dim, fontSize: 13 }}>Пока нет записей</div>
+            ) : (
+              <div className="activity-list">
+                {microlog.map(l => {
+                  const entry = formatMicrologEntry(l);
+                  return (
+                    <div key={l.id} className="activity-row">
+                      <div className="activity-icon">
+                        <IconBox tone={logTone(l.message)} size={40}>{logIcon(l.message)}</IconBox>
+                      </div>
+                      <div className="activity-content">
+                        <div className="activity-title">{entry.title}</div>
+                        {entry.details && <div className="activity-details single-line">{entry.details}</div>}
+                        <div className="activity-meta single-line">
+                          {entry.meta}{entry.meta ? " · " : ""}{relTime(l.date)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+          </motion.div>
+
+          <motion.div variants={listItem} className="kpi-row">
             <Stat icon={<I.check size={18} />} label="Сегодня произведено" value={`${todayProduced} ед.`} color={C.success} />
-            <Stat icon={<I.tasks size={18} />} label="Активные задания" value={activeTasks} color={C.info} />
-            <Stat icon={<I.users size={18} />} label="Загрузка работников" value={`${busyCount}/${allWorkers.length}`} color={busyCount > 0 ? C.primary : C.dim} />
-            <Stat icon={<I.alert size={18} />} label="Срочные заказы" value={urgentOrders} color={urgentOrders > 0 ? C.danger : C.dim} />
-          </div>
-
-          {ShiftBlock}
+            <Stat icon={<I.tasks size={18} />} label="Ждут фасовки" value={packingWaiting} color={packingWaiting > 0 ? C.orange : C.dim} />
+            <Stat icon={<I.truck size={18} />} label="В доставке" value={deliveryActive} color={deliveryActive > 0 ? C.info : C.dim} />
+            <Stat icon={<I.users size={18} />} label="Загрузка" value={`${busyCount}/${allWorkers.length}`} color={busyCount > 0 ? C.primary : C.dim} />
+          </motion.div>
 
           {activeOrders.length > 0 && (
+            <motion.div variants={listItem}>
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <Title>Активные заказы</Title>
+                <Title>Заказы магазинов</Title>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   {urgentOrders > 0 && <Badge color="danger">{urgentOrders} срочных</Badge>}
                   <button onClick={() => setPage("clients")} style={{ fontSize: 11, color: C.primary, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>все →</button>
@@ -406,7 +537,7 @@ const DashboardPage = () => {
                       <div style={{ width: 3, height: 32, borderRadius: 2, background: priClr, flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{cl?.name || "—"}</div>
-                        <div style={{ fontSize: 11, color: C.dim }}>{o.items.map(it => products.find(p => p.id === it.productId)?.name || "?").join(", ")} · {o.total.toLocaleString("ru")} ₽</div>
+                        <div style={{ fontSize: 11, color: C.dim }}>{o.items.map(it => products.find(p => p.id === it.productId)?.name || "?").join(", ")} · {formatMoney(o.total)}</div>
                       </div>
                       <Badge color={o.status === "готов" ? "purple" : o.status === "в производстве" ? "primary" : o.status === "сборка" ? "orange" : "info"} s={{ fontSize: 10 }}>{o.status}</Badge>
                     </div>
@@ -414,6 +545,7 @@ const DashboardPage = () => {
                 })}
               </div>
             </Card>
+            </motion.div>
           )}
 
           {forecasts.length > 0 && (
@@ -461,8 +593,8 @@ const DashboardPage = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.06)" />
                   <XAxis dataKey="date" tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip contentStyle={chartTooltipStyle} />
-                  <Area type="monotone" dataKey="qty" stroke={C.cyan} fill="url(#gP)" name="Кол-во" />
+                  <Tooltip content={<GlassChartTooltip />} />
+                  <Area type="monotone" dataKey="qty" stroke={C.info} fill="url(#gP)" name="Кол-во" isAnimationActive={chartAnim} animationDuration={900} animationEasing="ease-out" />
                 </AreaChart>
               </ResponsiveContainer>
             </Card>
@@ -473,9 +605,9 @@ const DashboardPage = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.06)" />
                   <XAxis dataKey="name" tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: C.dim, fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip contentStyle={chartTooltipStyle} />
-                  <Bar dataKey="stock" fill={C.info} radius={[4, 4, 0, 0]} name="Остаток" />
-                  <Bar dataKey="min" fill={C.danger} radius={[4, 4, 0, 0]} name="Минимум" />
+                  <Tooltip content={<GlassChartTooltip />} />
+                  <Bar dataKey="stock" fill={C.info} radius={[6, 6, 0, 0]} name="Остаток" />
+                  <Bar dataKey="min" fill={C.danger} radius={[6, 6, 0, 0]} name="Минимум" />
                 </BarChart>
               </ResponsiveContainer>
             </Card>
@@ -495,9 +627,9 @@ const DashboardPage = () => {
           </div>
         </section>
 
-        <aside className="dashboard-rail">
+        <motion.aside className="dashboard-rail" variants={fadeUp} transition={{ delay: 0.12 }}>
           <Card>
-            <Title>Операционный статус</Title>
+            <Title>Статус смены</Title>
             <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
               <div style={{ position: "relative", width: 88, height: 88, flexShrink: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -525,36 +657,32 @@ const DashboardPage = () => {
           </Card>
 
           <Card>
-            <Title>Срочно сегодня</Title>
-            {visibleWarnings.length === 0 ? (
-              <div style={{ fontSize: 13, color: C.dim, textAlign: "center", padding: "12px 0" }}>Критичных событий нет</div>
-            ) : (
-              <div style={{ display: "grid", gap: 6 }}>
-                {visibleWarnings.slice(0, 5).map(w => (
-                  <div key={w.key} className="risk-row" style={{ background: w.type === "danger" ? C.dangerBg : C.orangeBg }}>
-                    {w.icon}
-                    <span style={{ fontSize: 12, color: C.text, flex: 1 }}>{w.text}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {visibleWarnings.length > 5 && (
-              <div style={{ fontSize: 11, color: C.dim, marginTop: 8, textAlign: "center" }}>+{visibleWarnings.length - 5} ещё</div>
-            )}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <Title>Требует внимания</Title>
+              <button onClick={() => setPage("notifications")} style={{ fontSize: 11, color: C.primary, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Уведомления →</button>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+              {healthScore >= 80
+                ? "Критичных событий нет. Предупреждения смотрите в колокольчике."
+                : "Есть зоны внимания — откройте уведомления для деталей и скрытия."}
+            </div>
           </Card>
 
           <Card>
             <Title>Быстрые действия</Title>
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="quick-actions-grid">
               {[
-                { label: "+ Задание", pg: "tasks", icon: <I.tasks size={14} /> },
-                { label: "+ Выпуск", pg: "prodOutput", icon: <I.factory size={14} /> },
-                { label: "+ Поставка", pg: "deliveries", icon: <I.down size={14} /> },
-                { label: "+ Заказ", pg: "clients", icon: <I.send size={14} /> },
-                { label: "Долги", pg: "debts", icon: <I.truck size={14} /> },
+                { label: "Задание", pg: "tasks", icon: <I.tasks size={14} /> },
+                { label: "Выпуск", pg: "prodOutput", icon: <I.factory size={14} /> },
+                { label: "Поставка", pg: "deliveries", icon: <I.down size={14} /> },
+                { label: "Заказ", pg: "clients", icon: <I.send size={14} /> },
+                { label: "Долги", pg: "debts", icon: <I.chart size={14} /> },
                 { label: "Закупки", pg: "procurement", icon: <I.box size={14} /> },
               ].map(a => (
-                <button key={a.pg} className="quick-action-btn" onClick={() => setPage(a.pg)}>{a.icon}{a.label}</button>
+                <button key={a.pg} className="quick-action-btn" onClick={() => setPage(a.pg)}>
+                  <span className="quick-action-icon">{a.icon}</span>
+                  <span className="quick-action-label">{a.label}</span>
+                </button>
               ))}
             </div>
           </Card>
@@ -562,16 +690,18 @@ const DashboardPage = () => {
           {canSeeFinance && activeDebts.length > 0 && (
             <Card onClick={() => setPage("debts")}>
               <Title>Долги магазинов</Title>
-              <div style={{ fontSize: 24, fontWeight: 800, color: C.danger, marginBottom: 8 }}>{(totalActiveDebt / 1000).toFixed(0)}т ₽</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: C.danger, marginBottom: 8 }}>{formatMoney(totalActiveDebt)}</div>
               <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{activeDebts.length} магазинов-должников</div>
               {topDebtors.map((d, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.06)", fontSize: 12 }}>
                   <span style={{ color: C.text }}>{d.store}</span>
-                  <span style={{ color: C.danger, fontWeight: 600 }}>{(d.amount / 1000).toFixed(0)}т ₽</span>
+                  <span style={{ color: C.danger, fontWeight: 600 }}>{formatMoney(d.amount)}</span>
                 </div>
               ))}
             </Card>
           )}
+
+          {attendanceRail}
 
           {nearExpiryBatches.length > 0 && (
             <Card>
@@ -586,38 +716,9 @@ const DashboardPage = () => {
               </div>
             </Card>
           )}
-        </aside>
+        </motion.aside>
       </div>
-
-      {(visibleWarnings.length > 0 || hiddenWarningsList.length > 0) && (
-        <Card s={{ marginTop: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.danger, display: "flex", alignItems: "center", gap: 6 }}>
-              <I.alert size={16} /> Предупреждения ({visibleWarnings.length})
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {selectedWarns.size > 0 && <Btn v="ghost" sz="sm" onClick={hideSelected}>Скрыть ({selectedWarns.size})</Btn>}
-              {visibleWarnings.length > 0 && <Btn v="ghost" sz="sm" onClick={hideAll}>Скрыть все</Btn>}
-              {hiddenWarningsList.length > 0 && <Btn v="ghost" sz="sm" onClick={() => setShowHidden(!showHidden)}>{showHidden ? "Закрыть" : "Скрытые"} ({hiddenWarningsList.length})</Btn>}
-            </div>
-          </div>
-          <div style={{ display: "grid", gap: 5 }}>
-            {visibleWarnings.map(w => (
-              <div key={w.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: w.type === "danger" ? C.dangerBg : C.orangeBg, borderRadius: 10, fontSize: 12 }}>
-                <input type="checkbox" checked={selectedWarns.has(w.key)} onChange={() => toggleWarn(w.key)} style={{ accentColor: C.primary }} />
-                {w.icon}<span style={{ flex: 1 }}>{w.text}</span>
-              </div>
-            ))}
-          </div>
-          {showHidden && hiddenWarningsList.map(w => (
-            <div key={w.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", fontSize: 11, color: C.dim, opacity: 0.7 }}>
-              {w.icon}<span style={{ flex: 1 }}>{w.text}</span>
-              <button onClick={() => setHiddenWarnings(p => { const n = new Set(p); n.delete(w.key); return n })} style={{ background: "none", border: "none", color: C.info, cursor: "pointer", fontSize: 10 }}>показать</button>
-            </div>
-          ))}
-        </Card>
-      )}
-    </div>
+    </motion.div>
   );
 };
 

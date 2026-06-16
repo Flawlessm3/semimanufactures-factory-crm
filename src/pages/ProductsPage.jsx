@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
 import { AppContext } from "../context/AppContext.js";
-import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
+import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
 import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { formatMoney } from "../utils/formatters.js";
+import { canSeeFinance } from "../utils/roles.js";
 import { C, CC } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
-import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
+import { EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox, RecipeButton, RecipeModal } from "../components/ui/index.jsx";
+import { TechMapCard } from "../components/ui/TechMapCard.jsx";
 
 // RECIPE EDITOR COMPONENT
 const RecipeEditor = ({recipeItems, setRecipeItems, rawMaterials, showCostCalc=true}) => {
@@ -60,7 +63,7 @@ const RecipeEditor = ({recipeItems, setRecipeItems, rawMaterials, showCostCalc=t
               {idx===0&&<label style={{display:"block",fontSize:11,fontWeight:500,color:C.dim,marginBottom:3}}>Сырьё</label>}
               <select value={item.rawId} onChange={e=>updateItem(idx,"rawId",e.target.value)} style={{width:"100%",padding:"7px 8px",background:C.surface2,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:12,fontFamily:"inherit",appearance:"none"}}>
                 <option value="">Выберите</option>
-                {rawMaterials.map(r=><option key={r.id} value={r.id}>{r.name} ({r.costPerUnit}₽/{r.unit})</option>)}
+                {rawMaterials.map(r=><option key={r.id} value={r.id}>{r.name} ({formatMoney(r.costPerUnit)}/{r.unit})</option>)}
               </select>
             </div>
             <div style={{flex:"1 1 70px"}}>
@@ -73,7 +76,7 @@ const RecipeEditor = ({recipeItems, setRecipeItems, rawMaterials, showCostCalc=t
             </div>
             <div style={{flex:"0 0 70px",textAlign:"right"}}>
               {idx===0&&<label style={{display:"block",fontSize:11,fontWeight:500,color:C.dim,marginBottom:3}}>Стоимость</label>}
-              <span style={{fontSize:12,fontWeight:600,color:C.primary,lineHeight:"32px"}}>{itemCost.toFixed(1)}₽</span>
+              <span style={{fontSize:12,fontWeight:600,color:C.primary,lineHeight:"32px"}}>{formatMoney(itemCost,{maximumFractionDigits:1})}</span>
             </div>
             <button onClick={()=>removeItem(idx)} style={{background:"none",border:"none",color:C.danger,cursor:"pointer",padding:4,marginBottom:2,flexShrink:0}}>
               <I.x size={14}/>
@@ -85,7 +88,7 @@ const RecipeEditor = ({recipeItems, setRecipeItems, rawMaterials, showCostCalc=t
       {showCostCalc && recipeItems.length > 0 && (
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:`${C.primary}10`,borderRadius:8,border:`1px solid ${C.primary}25`,marginTop:6}}>
           <span style={{fontSize:13,fontWeight:600,color:C.text}}>Себестоимость по рецепту:</span>
-          <span style={{fontSize:16,fontWeight:800,color:C.primary}}>{calcCost.toFixed(2)}₽</span>
+          <span style={{fontSize:16,fontWeight:800,color:C.primary}}>{formatMoney(calcCost,{maximumFractionDigits:2})}</span>
         </div>
       )}
     </div>
@@ -93,26 +96,34 @@ const RecipeEditor = ({recipeItems, setRecipeItems, rawMaterials, showCostCalc=t
 };
 
 // PRODUCTS
+const LOW_STOCK = 20;
+const OK_STOCK = 50;
+const filterSelectStyle = { padding: "7px 9px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, color: C.text, fontSize: 12, fontFamily: "inherit" };
+const stockBorderAccent = (stock) => stock < LOW_STOCK ? `${C.danger}45` : stock >= OK_STOCK ? `${C.success}35` : C.border;
+const stockValueColor = (stock) => stock < LOW_STOCK ? C.danger : stock >= OK_STOCK ? C.success : C.text;
+const outputSourceLabel = (o) => o.source === "task" ? `Задание #${o.taskId || "?"}` : o.source === "manual" ? "Вручную" : o.source || "—";
+
 const ProductsPage = ()=>{
-  const {products,setProducts,addLog,currentUser,recipes,setRecipes,rawMaterials}=useContext(AppContext);
+  const {products,setProducts,addLog,currentUser,recipes,setRecipes,rawMaterials,productionOutputs,users}=useContext(AppContext);
   const [modal,setModal]=useState(false);
   const [recipeModal,setRecipeModal]=useState(null);
-  const [editRecipeModal,setEditRecipeModal]=useState(null);
+  const [histProduct,setHistProduct]=useState(null);
   const [edit,setEdit]=useState(null);
   const [confirm,setConfirm]=useState(null);
   const [search,setSearch]=useState("");
   const [fCat,setFCat]=useState("all");
-  const [fStat,setFStat]=useState("all");
+  const [fUnit,setFUnit]=useState("all");
+  const [fStock,setFStock]=useState("all");
+  const [sortBy,setSortBy]=useState("name");
   const [toast,setToast]=useState(null);
   const [errs,setErrs]=useState({});
-  const empty={name:"",category:CATEGORIES[0],description:"",costPrice:"",sellPrice:"",stock:"",unit:"кг",status:"в производстве"};
+  const empty={name:"",category:CATEGORIES[0],description:"",costPrice:"",sellPrice:"",stock:"",unit:"кг"};
   const [form,setForm]=useState(empty);
   const [recipeItems,setRecipeItems]=useState([]);
-  const [editRecipeItems,setEditRecipeItems]=useState([]);
   const role=ROLES.find(r=>r.id===currentUser.roleId);
   const canEdit=role?.name==="admin"||role?.name==="owner"||role?.name==="manager";
   const isAdmin=role?.name==="admin"||role?.name==="owner";
-  const isWorker=role?.name==="worker";
+  const showFinance=canSeeFinance(currentUser);
 
   // Calculate cost from recipe
   const recipeCost = useMemo(() => {
@@ -134,26 +145,50 @@ const ProductsPage = ()=>{
     let l=products.filter(p=>!p.deleted);
     if(search)l=l.filter(p=>p.name.toLowerCase().includes(search.toLowerCase()));
     if(fCat!=="all")l=l.filter(p=>p.category===fCat);
-    if(fStat!=="all")l=l.filter(p=>p.status===fStat);
-    return l.sort((a,b)=>a.name.localeCompare(b.name));
-  },[products,search,fCat,fStat]);
+    if(fUnit!=="all")l=l.filter(p=>p.unit===fUnit);
+    if(fStock==="low")l=l.filter(p=>p.stock>0&&p.stock<LOW_STOCK);
+    else if(fStock==="zero")l=l.filter(p=>p.stock<=0);
+    else if(fStock==="instock")l=l.filter(p=>p.stock>0);
+    const sorters={
+      name:(a,b)=>a.name.localeCompare(b.name,"ru"),
+      stock:(a,b)=>b.stock-a.stock,
+      price:(a,b)=>b.sellPrice-a.sellPrice,
+      margin:(a,b)=>{
+        const ma=a.costPrice>0?(a.sellPrice-a.costPrice)/a.costPrice:-1;
+        const mb=b.costPrice>0?(b.sellPrice-b.costPrice)/b.costPrice:-1;
+        return mb-ma;
+      },
+    };
+    return [...l].sort(sorters[sortBy]||sorters.name);
+  },[products,search,fCat,fUnit,fStock,sortBy]);
+
+  const histOutputs=useMemo(()=>{
+    if(!histProduct)return[];
+    return (productionOutputs||[]).filter(o=>o.productId===histProduct).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  },[histProduct,productionOutputs]);
+
+  const histSummary=useMemo(()=>({
+    total:histOutputs.reduce((s,o)=>s+o.quantity,0),
+    count:histOutputs.length,
+    last:histOutputs[0]||null,
+  }),[histOutputs]);
 
   const openNew=()=>{setEdit(null);setForm(empty);setRecipeItems([]);setErrs({});setModal(true)};
   const openEdit=p=>{
     setEdit(p);
-    setForm({name:p.name,category:p.category,description:p.description,costPrice:p.costPrice,sellPrice:p.sellPrice,stock:p.stock,unit:p.unit,status:p.status});
+    setForm({name:p.name,category:p.category,description:p.description,costPrice:p.costPrice,sellPrice:p.sellPrice,stock:p.stock,unit:p.unit});
     const recipe = recipes.find(r=>r.productId===p.id);
     setRecipeItems(recipe ? recipe.items.map(it=>({rawId:it.rawId,qty:it.qty,unit:it.unit||rawMaterials.find(r=>r.id===it.rawId)?.unit||"кг"})) : []);
     setErrs({});
     setModal(true);
   };
-  const validate=()=>{const e={};if(!form.name.trim())e.name="!";if(!form.costPrice||+form.costPrice<=0)e.costPrice="!";if(!form.sellPrice||+form.sellPrice<=0)e.sellPrice="!";if(form.stock===""||+form.stock<0)e.stock="!";setErrs(e);return!Object.keys(e).length};
+  const validate=()=>{const e={};if(!form.name.trim())e.name="!";if(showFinance&&(!form.costPrice||+form.costPrice<=0))e.costPrice="!";if(showFinance&&(!form.sellPrice||+form.sellPrice<=0))e.sellPrice="!";if(form.stock===""||+form.stock<0)e.stock="!";setErrs(e);return!Object.keys(e).length};
 
   const save=()=>{
     if(!validate())return;
     const now=new Date().toISOString();
     if(edit){
-      setProducts(p=>p.map(x=>x.id===edit.id?{...x,name:form.name,category:form.category,description:form.description,costPrice:+form.costPrice,sellPrice:+form.sellPrice,stock:+form.stock,unit:form.unit,status:form.status,updatedAt:now}:x));
+      setProducts(p=>p.map(x=>x.id===edit.id?{...x,name:form.name,category:form.category,description:form.description,costPrice:+form.costPrice,sellPrice:+form.sellPrice,stock:+form.stock,unit:form.unit,updatedAt:now}:x));
       // Update or create recipe
       if(recipeItems.length > 0 && isAdmin) {
         const validItems = recipeItems.filter(it=>it.rawId && it.qty && +it.qty > 0).map(it=>({rawId:+it.rawId,qty:+it.qty,unit:it.unit}));
@@ -170,7 +205,7 @@ const ProductsPage = ()=>{
       setToast({message:"Обновлён",type:"success"});
     } else {
       const newId = Date.now();
-      setProducts(p=>[...p,{id:newId,...form,costPrice:+form.costPrice,sellPrice:+form.sellPrice,stock:+form.stock,createdAt:now,updatedAt:now,deleted:false}]);
+      setProducts(p=>[...p,{id:newId,...form,costPrice:+form.costPrice,sellPrice:+form.sellPrice,stock:+form.stock,status:"в производстве",createdAt:now,updatedAt:now,deleted:false}]);
       // Create recipe if items added
       if(recipeItems.length > 0) {
         const validItems = recipeItems.filter(it=>it.rawId && it.qty && +it.qty > 0).map(it=>({rawId:+it.rawId,qty:+it.qty,unit:it.unit}));
@@ -184,81 +219,82 @@ const ProductsPage = ()=>{
     setModal(false);
   };
 
-  const del=p=>{setConfirm({title:"Удалить?",message:`Удалить "${p.name}"?`,onConfirm:()=>{setProducts(prev=>prev.map(x=>x.id===p.id?{...x,deleted:true}:x));setRecipes(prev=>prev.filter(r=>r.productId!==p.id));addLog(`Удалён: ${p.name}`);setToast({message:"Удалён",type:"error"});setConfirm(null)}})};
-  const updateStatus=(p,s)=>{setProducts(prev=>prev.map(x=>x.id===p.id?{...x,status:s,updatedAt:new Date().toISOString()}:x));addLog(`Статус "${p.name}": ${s}`);setToast({message:"Обновлён",type:"success"})};
-  const sc=s=>s==="готов"?"success":s==="в производстве"?"primary":"danger";
-
-  // Edit recipe modal handlers
-  const openEditRecipe = (productId) => {
-    const recipe = recipes.find(r=>r.productId===productId);
-    setEditRecipeItems(recipe ? recipe.items.map(it=>({rawId:it.rawId,qty:it.qty,unit:it.unit||rawMaterials.find(r=>r.id===it.rawId)?.unit||"кг"})) : []);
-    setEditRecipeModal(productId);
-  };
-
-  const saveEditRecipe = () => {
-    if(!editRecipeModal) return;
-    const now = new Date().toISOString();
-    const validItems = editRecipeItems.filter(it=>it.rawId && it.qty && +it.qty > 0).map(it=>({rawId:+it.rawId,qty:+it.qty,unit:it.unit}));
-    const existingRecipe = recipes.find(r=>r.productId===editRecipeModal);
-
-    if(validItems.length > 0) {
-      if(existingRecipe) {
-        setRecipes(p=>p.map(r=>r.productId===editRecipeModal?{...r,items:validItems,updatedAt:now}:r));
-      } else {
-        setRecipes(p=>[...p,{id:Date.now(),productId:editRecipeModal,items:validItems,createdAt:now,updatedAt:now}]);
-      }
-      // Update product cost
-      const newCost = validItems.reduce((sum, it) => {
-        const raw = rawMaterials.find(r=>r.id===it.rawId);
-        return sum + (raw?.costPerUnit||0)*it.qty;
-      }, 0);
-      setProducts(p=>p.map(x=>x.id===editRecipeModal?{...x,costPrice:+newCost.toFixed(2),updatedAt:now}:x));
-    } else if(existingRecipe) {
-      setRecipes(p=>p.filter(r=>r.productId!==editRecipeModal));
-    }
-    addLog(`Рецептура обновлена: ${products.find(p=>p.id===editRecipeModal)?.name}`);
-    setToast({message:"Рецептура сохранена",type:"success"});
-    setEditRecipeModal(null);
-  };
+  const del=p=>{setConfirm({title:"Удалить?",message:`Удалить "${p.name}"?`,onConfirm:()=>{const now=new Date().toISOString();setProducts(prev=>prev.map(x=>x.id===p.id?{...x,deleted:true,deletedAt:now,deletedBy:currentUser.id,deletedByName:currentUser.name,deletedReason:""}:x));setRecipes(prev=>prev.filter(r=>r.productId!==p.id));addLog(`Удалён: ${p.name}`);setToast({message:"Удалён",type:"error"});setConfirm(null)}})};
 
   return(
     <div>
       <PageH title="Товары">
         <SearchBox value={search} onChange={e=>setSearch(e.target.value)}/>
-        <select value={fCat} onChange={e=>setFCat(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}><option value="all">Все категории</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
-        <select value={fStat} onChange={e=>setFStat(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}><option value="all">Все статусы</option>{STATUSES.map(s=><option key={s} value={s}>{s}</option>)}</select>
+        <select value={fCat} onChange={e=>setFCat(e.target.value)} style={filterSelectStyle}><option value="all">Все категории</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
+        <select value={fUnit} onChange={e=>setFUnit(e.target.value)} style={filterSelectStyle}><option value="all">Все ед.</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+        <select value={fStock} onChange={e=>setFStock(e.target.value)} style={filterSelectStyle}>
+          <option value="all">Весь склад</option>
+          <option value="low">Мало (&lt; {LOW_STOCK})</option>
+          <option value="zero">Нулевой</option>
+          <option value="instock">В наличии</option>
+        </select>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={filterSelectStyle}>
+          <option value="name">По названию</option>
+          <option value="stock">По остатку</option>
+          {showFinance&&<option value="price">По цене</option>}
+          {showFinance&&<option value="margin">По марже</option>}
+        </select>
         {canEdit&&<Btn onClick={openNew} icon={<I.plus size={15}/>}>Добавить</Btn>}
       </PageH>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}}>
+      <div className="products-grid">
         {list.map(p=>{
           const recipe=recipes.find(r=>r.productId===p.id);
-          const recipeCostVal = recipe ? recipe.items.reduce((s,it)=>{const raw=rawMaterials.find(r=>r.id===it.rawId);return s+(raw?.costPerUnit||0)*it.qty},0) : null;
+          const metrics=showFinance
+            ?[
+              ["Себестоимость",formatMoney(p.costPrice),C.text,false],
+              ["Цена",formatMoney(p.sellPrice),C.success,false],
+              ["Склад",`${p.stock} ${p.unit}`,stockValueColor(p.stock),true],
+              ["Маржа",p.costPrice>0?`${((p.sellPrice-p.costPrice)/p.costPrice*100).toFixed(0)}%`:"—",C.primary,false],
+            ]
+            :[["Склад",`${p.stock} ${p.unit}`,stockValueColor(p.stock),true]];
           return(
-          <Card key={p.id} s={{display:"flex",flexDirection:"column",gap:8,overflow:"hidden"}}>
-            <div style={{position:"absolute",top:0,left:0,right:0}}><EthnicBorder color={sc(p.status)==="success"?C.success:sc(p.status)==="primary"?C.primary:C.danger} height={2}/></div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",paddingTop:4}}>
-              <div><div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:2}}>{p.name}</div><Badge color="purple">{p.category}</Badge></div>
-              <Badge color={sc(p.status)}>{p.status}</Badge>
+          <Card key={p.id} className="product-card" s={{overflow:"hidden",borderTop:`1px solid ${stockBorderAccent(p.stock)}`}}>
+            <div className="product-card-header">
+              <h3 className="product-card-title product-name">{p.name}</h3>
             </div>
-            {p.description&&<div style={{fontSize:12,color:C.muted,lineHeight:1.4}}>{p.description}</div>}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:"auto"}}>
-              {(isWorker
-                ? [["Склад",`${p.stock} ${p.unit}`,p.stock<20?C.danger:C.text],["Статус",p.status,C.primary]]
-                : [["Себестоимость",`${p.costPrice}₽`,C.text],["Цена",`${p.sellPrice}₽`,C.success],["Склад",`${p.stock} ${p.unit}`,p.stock<20?C.danger:C.text],["Маржа",`${((p.sellPrice-p.costPrice)/p.costPrice*100).toFixed(0)}%`,C.primary]]
-              ).map(([l,v,c],i)=>(
-                <div key={i} style={{background:C.bg,borderRadius:7,padding:"6px 8px"}}><div style={{fontSize:10,color:C.dim}}>{l}</div><div style={{fontSize:14,fontWeight:700,color:c}}>{v}</div></div>
+            <div className="product-card-category">
+              <Badge color="purple">{p.category}</Badge>
+            </div>
+            <p className="product-card-description">{p.description || "\u00A0"}</p>
+            <div className="product-card-metrics product-metrics">
+              {metrics.map(([l,v,c,clickable],i)=>(
+                <div
+                  key={i}
+                  className="product-metric"
+                  onClick={clickable?()=>setHistProduct(p.id):undefined}
+                  title={clickable?"История производства":undefined}
+                  style={clickable?{cursor:"pointer"}:undefined}
+                >
+                  <div style={{fontSize:10,color:C.dim,marginBottom:4}}>{l}{clickable&&<I.clock size={10} style={{marginLeft:4,verticalAlign:"middle",opacity:.7}}/>}</div>
+                  <div className="product-metric-value" style={{fontSize:14,fontWeight:700,color:c}}>{v}</div>
+                </div>
               ))}
             </div>
-            {recipe&&<div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:11,color:C.muted,cursor:"pointer",textDecoration:"underline",flex:1}} onClick={()=>setRecipeModal(p.id)}>
-                <I.recipe size={12}/> Рецептура ({recipe.items.length} комп.)
-              </span>
-              {isAdmin&&<Btn v="ghost" sz="sm" onClick={()=>openEditRecipe(p.id)} icon={<I.edit size={12}/>} style={{fontSize:11,padding:"3px 6px"}}>Ред.</Btn>}
-            </div>}
-            {!recipe&&isAdmin&&<Btn v="ghost" sz="sm" onClick={()=>openEditRecipe(p.id)} icon={<I.plus size={12}/>} style={{fontSize:11}}>Добавить рецептуру</Btn>}
-            <div style={{display:"flex",gap:5,marginTop:2}}>
-              {isWorker&&<select value={p.status} onChange={e=>updateStatus(p,e.target.value)} style={{flex:1,padding:"6px 8px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}>{STATUSES.map(s=><option key={s} value={s}>{s}</option>)}</select>}
-              {canEdit&&<><Btn v="secondary" sz="sm" onClick={()=>openEdit(p)} icon={<I.edit size={13}/>}>Ред.</Btn><Btn v="danger" sz="sm" onClick={()=>del(p)} icon={<I.trash size={13}/>}/></>}
+            <div className="product-card-recipe">
+              {recipe ? (
+                <RecipeButton block productId={p.id} products={products} recipes={recipes} onOpen={setRecipeModal}/>
+              ) : canEdit ? (
+                <span className="product-card-recipe-empty">Рецептура не задана</span>
+              ) : (
+                <span className="product-card-recipe-empty product-card-recipe-empty--placeholder">&nbsp;</span>
+              )}
+            </div>
+            <div className="product-card-actions">
+              <div className="product-card-main-actions">
+                {canEdit ? (
+                  <Btn v="secondary" sz="sm" onClick={()=>openEdit(p)} icon={<I.edit size={13}/>}>Редактировать</Btn>
+                ) : null}
+              </div>
+              {canEdit && (
+                <button type="button" className="product-delete-btn" title="Удалить" onClick={()=>del(p)} style={{background:"rgba(255,107,95,.08)",border:`1px solid rgba(255,107,95,.28)`,color:C.danger,cursor:"pointer",fontFamily:"inherit"}}>
+                  <I.trash size={15}/>
+                </button>
+              )}
             </div>
           </Card>
         )})}
@@ -271,17 +307,16 @@ const ProductsPage = ()=>{
           <Inp label="Название" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} error={errs.name} cStyle={{gridColumn:"1/3"}}/>
           <Sel label="Категория" value={form.category} onChange={e=>setForm({...form,category:e.target.value})} options={CATEGORIES.map(c=>({value:c,label:c}))}/>
           <Sel label="Ед. изм." value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})} options={UNITS.map(u=>({value:u,label:u}))}/>
-          <Inp label="Себестоимость" type="number" value={form.costPrice} onChange={e=>setForm({...form,costPrice:e.target.value})} error={errs.costPrice}/>
-          <Inp label="Цена продажи" type="number" value={form.sellPrice} onChange={e=>setForm({...form,sellPrice:e.target.value})} error={errs.sellPrice}/>
+          {showFinance&&<Inp label="Себестоимость" type="number" value={form.costPrice} onChange={e=>setForm({...form,costPrice:e.target.value})} error={errs.costPrice}/>}
+          {showFinance&&<Inp label="Цена продажи" type="number" value={form.sellPrice} onChange={e=>setForm({...form,sellPrice:e.target.value})} error={errs.sellPrice}/>}
           <Inp label="Склад" type="number" value={form.stock} onChange={e=>setForm({...form,stock:e.target.value})} error={errs.stock}/>
-          <Sel label="Статус" value={form.status} onChange={e=>setForm({...form,status:e.target.value})} options={STATUSES.map(s=>({value:s,label:s}))}/>
           <Txa label="Описание" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} cStyle={{gridColumn:"1/3"}}/>
         </div>
 
         {/* Recipe section in product form (admin only) */}
         {isAdmin && (
           <div style={{borderTop:`1px solid ${C.border}`,paddingTop:14,marginTop:6}}>
-            <RecipeEditor recipeItems={recipeItems} setRecipeItems={setRecipeItems} rawMaterials={rawMaterials}/>
+            <RecipeEditor recipeItems={recipeItems} setRecipeItems={setRecipeItems} rawMaterials={rawMaterials} showCostCalc={showFinance}/>
           </div>
         )}
 
@@ -301,31 +336,61 @@ const ProductsPage = ()=>{
               <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
                 <span style={{color:C.text,fontSize:13}}>{raw?.name||"?"}</span>
                 <div style={{display:"flex",gap:16,alignItems:"center"}}>
-                  <span style={{color:C.muted,fontSize:12}}>{cost.toFixed(1)}₽</span>
+                  {showFinance&&<span style={{color:C.muted,fontSize:12}}>{formatMoney(cost,{maximumFractionDigits:1})}</span>}
                   <span style={{color:C.primary,fontWeight:600,fontSize:13}}>{it.qty} {it.unit||raw?.unit}</span>
                 </div>
               </div>
             )})}
-            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",marginTop:6}}>
+            {showFinance&&<div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",marginTop:6}}>
               <span style={{fontSize:14,fontWeight:700,color:C.text}}>Итого себестоимость:</span>
-              <span style={{fontSize:14,fontWeight:800,color:C.primary}}>{totalCost.toFixed(2)}₽</span>
-            </div>
+              <span style={{fontSize:14,fontWeight:800,color:C.primary}}>{formatMoney(totalCost,{maximumFractionDigits:2})}</span>
+            </div>}
             {recipe.updatedAt&&<div style={{fontSize:11,color:C.dim,marginTop:8}}>Обновлено: {fmtDate(recipe.updatedAt)}</div>}
+            {prod?.techCard?.length > 0 && (
+              <div style={{marginTop:16}}>
+                <TechMapCard steps={prod.techCard} compact defaultOpen />
+              </div>
+            )}
           </div>);
         })()}
       </Modal>
 
-      {/* Edit Recipe Standalone Modal */}
-      <Modal open={!!editRecipeModal} onClose={()=>setEditRecipeModal(null)} title={`Рецептура: ${products.find(p=>p.id===editRecipeModal)?.name||""}`} width={600}>
-        {editRecipeModal&&(
-          <div>
-            <RecipeEditor recipeItems={editRecipeItems} setRecipeItems={setEditRecipeItems} rawMaterials={rawMaterials}/>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
-              <Btn v="secondary" onClick={()=>setEditRecipeModal(null)}>Отмена</Btn>
-              <Btn onClick={saveEditRecipe}>Сохранить рецептуру</Btn>
+      <Modal open={!!histProduct} onClose={()=>setHistProduct(null)} title={`История производства: ${products.find(p=>p.id===histProduct)?.name||""}`} width={620}>
+        {histProduct&&(()=>{
+          const prod=products.find(p=>p.id===histProduct);
+          const lastEmp=histSummary.last?users.find(u=>u.id===histSummary.last.employeeId):null;
+          return(<div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,marginBottom:16}}>
+              <Stat icon={<I.factory size={16}/>} label="Всего произведено" value={`${histSummary.total} ${prod?.unit||""}`} color={C.success}/>
+              <Stat icon={<I.file size={16}/>} label="Записей" value={histSummary.count} color={C.info}/>
+              <Stat icon={<I.clock size={16}/>} label="Последний выпуск" value={histSummary.last?`${histSummary.last.quantity} ${prod?.unit||""}`:"—"} color={C.primary}/>
             </div>
-          </div>
-        )}
+            {histSummary.last&&<p style={{fontSize:12,color:C.dim,margin:"-6px 0 14px"}}>{fmtDate(histSummary.last.date)}{lastEmp?` · ${lastEmp.name.split(" ").slice(0,2).join(" ")}`:""}</p>}
+            {histOutputs.length===0?(
+              <div style={{textAlign:"center",padding:30,color:C.dim}}><I.factory size={32}/><p style={{marginTop:8,fontSize:13}}>Нет записей о выпуске</p></div>
+            ):(
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr><TH>Дата</TH><TH>Сотрудник</TH><TH>Кол-во</TH><TH>Источник</TH><TH>Комментарий</TH></tr></thead>
+                  <tbody>
+                    {histOutputs.map(o=>{
+                      const emp=users.find(u=>u.id===o.employeeId);
+                      return(
+                        <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                          <TD s={{fontSize:12,whiteSpace:"nowrap"}}>{fmtDate(o.date)}</TD>
+                          <TD s={{fontWeight:500}}>{emp?.name?.split(" ").slice(0,2).join(" ")||"—"}</TD>
+                          <TD s={{fontWeight:700,color:C.success}}>+{o.quantity} {prod?.unit||""}</TD>
+                          <TD s={{fontSize:12,color:C.muted}}>{outputSourceLabel(o)}</TD>
+                          <TD s={{color:C.dim,fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.comment||"—"}</TD>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>);
+        })()}
       </Modal>
 
       {confirm&&<Confirm open onClose={()=>setConfirm(null)} {...confirm}/>}

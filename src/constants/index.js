@@ -7,7 +7,7 @@ export const ROLES = [
 export const JOB_TITLES = ["лепщица","фасовщица","грузчик","курьер","торговый представитель","техничка","завхоз","менеджер цеха","другое"];
 export const PAY_TYPES = ["сдельная","фиксированная","смешанная"];
 export const STORE_STATUSES = ["active","blocked","blacklist"];
-export const STORE_STATUS_LABELS = {active:"Активен",blocked:"Заблокирован",blacklist:"Чёрный список"};
+export const STORE_STATUS_LABELS = {active:"Активен",blocked:"Заблокирован",blacklist:"Заблокирован"};
 export const ORDER_SOURCES = ["WhatsApp","телефон","вручную","другое"];
 export const ATTENDANCE_TYPES = ["приход","уход","опоздание","отсутствие"];
 export const ATTENDANCE_TYPE_COLORS = {приход:"success",уход:"info",опоздание:"orange",отсутствие:"danger"};
@@ -30,7 +30,7 @@ export const BOARD_COLUMNS = [
   {id:"новый",          label:"Новые"},
   {id:"сборка",         label:"Сборка"},
   {id:"в производстве", label:"В производстве"},
-  {id:"готов",          label:"Готово ✓"},
+  {id:"готов",          label:"Готово"},
 ];
 export const MOVEMENT_TYPES = {production:"Производство",output:"Выпуск (ручной)",sale:"Продажа",order_shipment:"Отгрузка заказа",manual_adjustment:"Коррекция"};
 export const DEBT_STATUSES = ["активен","частично погашен","погашен"];

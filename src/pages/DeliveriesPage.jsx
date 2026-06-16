@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { AppContext } from "../context/AppContext.js";
 import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
 import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
+import { GlassChartTooltip } from "../components/charts/GlassChartTooltip.jsx";
 import { C, CC } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
 import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
@@ -74,7 +75,7 @@ const DeliveriesPage = ()=>{
       </div>}
       {tab==="analytics"&&<Card><Title>Объёмы закупок</Title>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={supStats.map(s=>({name:s.name,total:s.total/1000}))}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:11}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}} formatter={v=>[`${v}т₽`]}/><Bar dataKey="total" fill={C.info} radius={[4,4,0,0]}/></BarChart>
+          <BarChart data={supStats.map(s=>({name:s.name,total:s.total/1000}))}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="name" tick={{fill:C.dim,fontSize:11}}/><YAxis tick={{fill:C.dim,fontSize:10}}/><Tooltip content={<GlassChartTooltip unit="thousands" />}/><Bar dataKey="total" fill={C.info} radius={[6,6,0,0]}/></BarChart>
         </ResponsiveContainer>
       </Card>}
       <Modal open={modal} onClose={()=>setModal(false)} title="Новая поставка">

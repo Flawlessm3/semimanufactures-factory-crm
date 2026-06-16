@@ -1,11 +1,165 @@
-import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { useState, useMemo, useContext } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { AppContext } from "../context/AppContext.js";
-import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
-import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
-import { C, CC } from "../theme/colors.js";
+import { ROLES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ORDER_STATUSES, ORDER_PRIORITIES } from "../constants/index.js";
+import { fmtShort } from "../utils/dates.js";
+import { formatMoney } from "../utils/formatters.js";
+import { isStoreBlacklisted } from "../utils/storeStatus.js";
+import { C } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
-import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
+import { Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card, PageH, IconBox } from "../components/ui/index.jsx";
+import { useAppMotion } from "../motion/MotionProvider.jsx";
+
+const actionMotion = {
+  initial: { opacity: 0, y: 8, filter: "blur(6px)" },
+  animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+  exit: { opacity: 0, y: -8, filter: "blur(6px)" },
+  transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
+};
+
+const StoreCard = ({
+  c,
+  isAdmin,
+  isSelected,
+  onToggleSelect,
+  onNewOrder,
+  onEdit,
+  onBlacklist,
+  onUnblock,
+  clientOrders,
+  statusColor,
+  statusLabel,
+  stIco,
+  fxType,
+  isFxActive,
+}) => {
+  const { reduceMotion } = useAppMotion();
+  const isBlacklisted = isStoreBlacklisted(c);
+  const motionProps = reduceMotion ? {} : actionMotion;
+  const fxClass = isFxActive && fxType === "block" ? " is-blocking-fx" : isFxActive && fxType === "unblock" ? " is-unblocking-fx" : "";
+
+  return (
+    <Card
+      className={`store-card${isBlacklisted ? " is-blacklisted" : ""}${fxClass}`}
+      layout={!reduceMotion}
+      s={{
+        cursor: isBlacklisted ? "default" : "pointer",
+        borderLeft: isBlacklisted ? undefined : `3px solid ${C[statusColor(c.status || "active")]}`,
+      }}
+      onClick={isBlacklisted ? undefined : () => onToggleSelect(c.id)}
+    >
+      <div className="store-card-header">
+        <div className="store-card-title-wrap">
+          <IconBox tone={isBlacklisted ? "danger" : statusColor(c.status || "active")} size={28}>
+            <I.store size={14} />
+          </IconBox>
+          <div style={{ minWidth: 0 }}>
+            <h3 className="store-title">
+              <span className={isBlacklisted ? "strikeable-text" : ""}>{c.name}</span>
+            </h3>
+            {!isBlacklisted && c.status && c.status !== "active" && (
+              <Badge color={statusColor(c.status)} s={{ fontSize: 10, marginTop: 2 }}>
+                {statusLabel(c.status)}
+              </Badge>
+            )}
+          </div>
+        </div>
+        <div className="store-card-badges-top">
+          {!isBlacklisted && <Badge color="info" s={{ fontSize: 10 }}>{c.activeOrders} акт.</Badge>}
+          {c.totalDebt > 0 && (
+            <Badge color="danger" s={{ fontSize: 10, opacity: isBlacklisted ? 0.72 : 1 }}>
+              {formatMoney(c.totalDebt, { compact: true })} долг
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {c.phone && (
+        <div className="store-contact-row">
+          <IconBox tone="info" size={24}><I.phone size={12} /></IconBox>
+          <span className={`store-contact-text${isBlacklisted ? " strikeable-muted" : ""}`}>{c.phone}</span>
+        </div>
+      )}
+      {c.whatsapp && (
+        <div className="store-contact-row">
+          <IconBox tone="success" size={24}><I.message size={12} /></IconBox>
+          <span className={`store-contact-text${isBlacklisted ? " strikeable-muted" : ""}`}>{c.whatsapp}</span>
+        </div>
+      )}
+      {c.address && (
+        <div className="store-contact-row">
+          <IconBox tone="neutral" size={24}><I.location size={12} /></IconBox>
+          <span className={`store-contact-text${isBlacklisted ? " strikeable-muted" : ""}`}>{c.address}</span>
+        </div>
+      )}
+
+      {isBlacklisted && (
+        <div className="store-block-reason">
+          <I.alert size={14} />
+          <span>{c.blockReason ? `Причина: ${c.blockReason}` : "Магазин заблокирован"}</span>
+        </div>
+      )}
+
+      {!isBlacklisted && (
+        <div className="store-stats-row">
+          <Badge color="success" s={{ fontSize: 10 }}>{formatMoney(c.totalSpent)} всего</Badge>
+          {c.orderCount > 0 && <Badge color="primary" s={{ fontSize: 10 }}>{c.orderCount} заказов</Badge>}
+        </div>
+      )}
+
+      <AnimatePresence mode="wait">
+        {!isBlacklisted ? (
+          <motion.div key="active-actions" className="store-card-actions" {...motionProps}>
+            <Btn sz="sm" onClick={e => { e.stopPropagation(); onNewOrder(c.id); }}>Новый заказ</Btn>
+            <Btn v="secondary" sz="sm" onClick={e => { e.stopPropagation(); onToggleSelect(c.id); }}>История</Btn>
+            <Btn v="secondary" sz="sm" onClick={e => { e.stopPropagation(); onEdit(c); }}>Изменить</Btn>
+            {isAdmin && (
+              <Btn
+                v="danger"
+                sz="sm"
+                onClick={e => { e.stopPropagation(); onBlacklist(c); }}
+                style={{ background: "transparent", border: `1px solid ${C.danger}40` }}
+              >
+                Заблокировать
+              </Btn>
+            )}
+          </motion.div>
+        ) : isAdmin ? (
+          <motion.div key="blocked-actions" className="store-card-actions store-card-actions--blocked" {...motionProps}>
+            <Btn
+              v="secondary"
+              sz="sm"
+              className="store-unblock-btn"
+              onClick={e => { e.stopPropagation(); onUnblock(c); }}
+              icon={<I.unlock size={14} />}
+            >
+              Разблокировать
+            </Btn>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {!isBlacklisted && isSelected && (
+        <div className="store-history-panel">
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Последние заказы:</div>
+          {clientOrders.filter(o => o.clientId === c.id).sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate)).slice(0, 5).map(o => (
+            <div key={o.id} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 12, color: C.text }}>
+                  {(o.items || []).map(it => it.productName ? `${it.productName} x${it.qty}` : `? x${it.qty}`).join(", ")}
+                </div>
+                <div style={{ fontSize: 10, color: C.dim }}>
+                  {fmtShort(o.orderDate)} {o.source ? `· ${o.source}` : ""} {o.shippedAt ? `· Отгружен: ${fmtShort(o.shippedAt)}` : ""}
+                </div>
+              </div>
+              <Badge color={stIco(o.status)} s={{ fontSize: 10 }}>{o.status}</Badge>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+};
 
 // STORES & ORDERS (бывший Clients)
 const ClientsPage = ()=>{
@@ -20,6 +174,7 @@ const ClientsPage = ()=>{
   const [selectedClient,setSelectedClient]=useState(null);
   const [historyOrder,setHistoryOrder]=useState(null);
   const [editStore,setEditStore]=useState(null);
+  const [storeFx,setStoreFx]=useState(null);
   const emptyStore={name:"",phone:"",whatsapp:"",address:"",contact:"",comment:"",status:"active",blockReason:""};
   const [form,setForm]=useState(emptyStore);
   const ap=products.filter(p=>!p.deleted);
@@ -58,12 +213,37 @@ const ClientsPage = ()=>{
   const updateOrderItem=(i,field,val)=>setOrderForm(f=>({...f,items:f.items.map((it,idx)=>idx===i?{...it,[field]:val}:it)}));
 
   const openNewOrder=()=>{setOrderForm({clientId:clients.filter(c=>c.status!=="blacklist")[0]?.id||"",items:[{productId:ap[0]?.id||"",qty:""}],note:"",source:"WhatsApp",priority:"нормальный"});setErrs({});setOrderModal(true)};
+  const openNewOrderForClient = (clientId) => {
+    const store = clients.find(c => c.id === clientId);
+    if (isStoreBlacklisted(store)) {
+      setToast({ message: "Магазин заблокирован. Сначала разблокируйте его.", type: "warn" });
+      return;
+    }
+    setOrderForm({ clientId, items: [{ productId: ap[0]?.id || "", qty: "" }], note: "", source: "WhatsApp", priority: "нормальный" });
+    setErrs({});
+    setOrderModal(true);
+  };
+
+  const blacklistStore = (c) => {
+    setClients(p => p.map(x => x.id === c.id ? { ...x, status: "blacklist", blockReason: "заблокирован вручную" } : x));
+    addLog(`Магазин заблокирован: ${c.name}`);
+    setStoreFx({ id: c.id, type: "block", ts: Date.now() });
+    setTimeout(() => setStoreFx(null), 800);
+    if (selectedClient === c.id) setSelectedClient(null);
+  };
+
+  const unblockStore = (c) => {
+    setClients(p => p.map(x => x.id === c.id ? { ...x, status: "active", blockReason: "" } : x));
+    addLog(`Магазин разблокирован: ${c.name}`);
+    setStoreFx({ id: c.id, type: "unblock", ts: Date.now() });
+    setTimeout(() => setStoreFx(null), 800);
+  };
 
   const saveOrder=()=>{
     if(!orderForm.clientId){setErrs({clientId:"!"});return}
     const store=clients.find(c=>c.id===+orderForm.clientId);
     // Block blacklisted stores (unless admin/owner overrides)
-    if(store?.status==="blacklist"&&!isAdmin){setToast({message:`${store.name} в чёрном списке — заказ запрещён`,type:"error"});return}
+    if(store?.status==="blacklist"&&!isAdmin){setToast({message:`Заказ недоступен: ${store.name} заблокирован`,type:"error"});return}
     if(store?.status==="blocked"&&!isAdmin){setToast({message:`${store.name} заблокирован`,type:"error"});return}
     const validItems=orderForm.items.filter(it=>it.productId&&it.qty&&+it.qty>0);
     if(!validItems.length){setToast({message:"Добавьте товары",type:"error"});return}
@@ -76,8 +256,8 @@ const ClientsPage = ()=>{
     const now=new Date().toISOString();
     // Snapshot address at time of order
     const addressSnapshot=store?.address||"";
-    const itemsSnapshot=validItems.map(it=>({productId:+it.productId,qty:+it.qty,productName:products.find(p=>p.id===+it.productId)?.name||"?",unit:products.find(p=>p.id===+it.productId)?.unit||""}));
-    setClientOrders(p=>[...p,{id:Date.now(),clientId:+orderForm.clientId,items:itemsSnapshot,orderDate:now,status:"новый",total,note:orderForm.note,source:orderForm.source||"вручную",priority:orderForm.priority||"нормальный",addressSnapshot,statusChangedAt:now,shippedAt:null,shippedBy:null,history:[{from:null,to:"новый",userId:currentUser.id,userName:currentUser.name,at:now}]}]);
+    const itemsSnapshot=validItems.map(it=>({productId:+it.productId,qty:+it.qty,productName:products.find(p=>p.id===+it.productId)?.name||"?",unit:products.find(p=>p.id===+it.productId)?.unit||"",packedQty:0,packedBy:null,packedAt:null}));
+    setClientOrders(p=>[...p,{id:Date.now(),clientId:+orderForm.clientId,items:itemsSnapshot,orderDate:now,status:"новый",total,note:orderForm.note,source:orderForm.source||"вручную",priority:orderForm.priority||"нормальный",addressSnapshot,statusChangedAt:now,shippedAt:null,shippedBy:null,packingStatus:"не начата",readyForDeliveryAt:null,deliveryStatus:"ожидает",courierId:null,deliveryStartedAt:null,deliveredAt:null,deliveryComment:"",stockDeductedAt:null,history:[{from:null,to:"новый",userId:currentUser.id,userName:currentUser.name,at:now}]}]);
     addLog(`Заказ от ${store?.name} — ${total.toLocaleString("ru")} ₽ (${orderForm.source})`);
     setToast({message:"Заказ создан — товар зарезервирован",type:"success"});setOrderModal(false);
   };
@@ -140,46 +320,25 @@ const ClientsPage = ()=>{
       </PageH>
 
       {tab==="clients"&&(
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:12}}>
+        <div className="stores-grid">
           {clientStats.map(c=>(
-            <Card key={c.id} s={{cursor:"pointer",borderLeft:`3px solid ${C[statusColor(c.status||"active")]}`}} onClick={()=>setSelectedClient(selectedClient===c.id?null:c.id)}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,alignItems:"flex-start"}}>
-                <div>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>{c.name}</div>
-                  {c.status&&c.status!=="active"&&<Badge color={statusColor(c.status)} s={{fontSize:10,marginTop:2}}>{statusLabel(c.status)}</Badge>}
-                </div>
-                <div style={{display:"flex",gap:5,flexShrink:0}}>
-                  <Badge color="info" s={{fontSize:10}}>{c.activeOrders} акт.</Badge>
-                  {c.totalDebt>0&&<Badge color="danger" s={{fontSize:10}}>{(c.totalDebt/1000).toFixed(0)}т₽ долг</Badge>}
-                </div>
-              </div>
-              {c.phone&&<div style={{fontSize:12,color:C.muted,display:"flex",gap:10}}><span>📞 {c.phone}</span>{c.whatsapp&&<span>💬 {c.whatsapp}</span>}</div>}
-              {c.address&&<div style={{fontSize:11,color:C.dim,marginTop:2}}>📍 {c.address}</div>}
-              {c.status==="blacklist"&&c.blockReason&&<div style={{fontSize:11,color:C.danger,marginTop:4,fontStyle:"italic"}}>Причина: {c.blockReason}</div>}
-              <div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap"}}>
-                <Badge color="success" s={{fontSize:10}}>{c.totalSpent.toLocaleString("ru")} ₽ всего</Badge>
-                {c.orderCount>0&&<Badge color="primary" s={{fontSize:10}}>{c.orderCount} заказов</Badge>}
-              </div>
-              <div style={{marginTop:8,display:"flex",gap:6}}>
-                <button onClick={e=>{e.stopPropagation();openEditStore(c)}} style={{fontSize:11,color:C.primary,background:"none",border:`1px solid ${C.primary}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>Изменить</button>
-                {isAdmin&&c.status!=="blacklist"&&<button onClick={e=>{e.stopPropagation();setClients(p=>p.map(x=>x.id===c.id?{...x,status:"blacklist",blockReason:"заблокирован вручную"}:x));addLog(`Чёрный список: ${c.name}`)}} style={{fontSize:11,color:C.danger,background:"none",border:`1px solid ${C.danger}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>В ЧС</button>}
-                {isAdmin&&c.status!=="active"&&<button onClick={e=>{e.stopPropagation();setClients(p=>p.map(x=>x.id===c.id?{...x,status:"active",blockReason:""}:x));addLog(`Разблок.: ${c.name}`)}} style={{fontSize:11,color:C.success,background:"none",border:`1px solid ${C.success}30`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>Разблокировать</button>}
-              </div>
-              {selectedClient===c.id&&(
-                <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-                  <div style={{fontSize:12,fontWeight:600,color:C.text,marginBottom:6}}>Последние заказы:</div>
-                  {clientOrders.filter(o=>o.clientId===c.id).sort((a,b)=>new Date(b.orderDate)-new Date(a.orderDate)).slice(0,5).map(o=>(
-                    <div key={o.id} style={{padding:"6px 0",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
-                        <div style={{fontSize:12,color:C.text}}>{(o.items||[]).map(it=>it.productName?`${it.productName} x${it.qty}`:`? x${it.qty}`).join(", ")}</div>
-                        <div style={{fontSize:10,color:C.dim}}>{fmtShort(o.orderDate)} {o.source?`· ${o.source}`:""} {o.shippedAt?`· Отгружен: ${fmtShort(o.shippedAt)}`:""}</div>
-                      </div>
-                      <Badge color={stIco(o.status)} s={{fontSize:10}}>{o.status}</Badge>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
+            <StoreCard
+              key={c.id}
+              c={c}
+              isAdmin={isAdmin}
+              isSelected={selectedClient===c.id}
+              onToggleSelect={(id)=>setSelectedClient(selectedClient===id?null:id)}
+              onNewOrder={openNewOrderForClient}
+              onEdit={openEditStore}
+              onBlacklist={blacklistStore}
+              onUnblock={unblockStore}
+              clientOrders={clientOrders}
+              statusColor={statusColor}
+              statusLabel={statusLabel}
+              stIco={stIco}
+              fxType={storeFx?.id === c.id ? storeFx.type : null}
+              isFxActive={storeFx?.id === c.id && Date.now() - storeFx.ts < 800}
+            />
           ))}
           {clients.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:50,color:C.dim}}>Нет магазинов. Добавьте первый.</div>}
         </div>
@@ -201,7 +360,7 @@ const ClientsPage = ()=>{
                     {cl?.name||"—"}
                     {o.priority==="срочный"&&<span style={{marginLeft:5,fontSize:9,fontWeight:700,color:C.danger,background:`${C.danger}15`,padding:"1px 5px",borderRadius:3}}>СРОЧНО</span>}
                     {o.priority==="важный"&&<span style={{marginLeft:5,fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}15`,padding:"1px 5px",borderRadius:3}}>ВАЖНО</span>}
-                    {o.addressSnapshot&&<div style={{fontSize:10,color:C.dim}}>📍 {o.addressSnapshot}</div>}
+                    {o.addressSnapshot&&<div style={{fontSize:10,color:C.dim,display:"flex",alignItems:"center",gap:4}}><I.location size={10}/>{o.addressSnapshot}</div>}
                   </TD>
                   <TD s={{fontSize:12}}>{(o.items||[]).map(it=>it.productName?`${it.productName} x${it.qty}`:(products.find(x=>x.id===it.productId)?.name||"?")+" x"+it.qty).join(", ")}</TD>
                   <TD s={{fontWeight:700,color:C.primary}}>{(o.total||0).toLocaleString("ru")} ₽</TD>
@@ -245,11 +404,11 @@ const ClientsPage = ()=>{
       {/* New Order Modal */}
       <Modal open={orderModal} onClose={()=>setOrderModal(false)} title="Новый заказ" width={560}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-          <Sel label="Магазин" value={orderForm.clientId} onChange={e=>setOrderForm({...orderForm,clientId:e.target.value})} error={errs.clientId} options={[{value:"",label:"Выберите"},...clients.map(c=>({value:c.id,label:`${c.name}${c.status!=="active"?" ⚠":""}`}))]}/>
+          <Sel label="Магазин" value={orderForm.clientId} onChange={e=>setOrderForm({...orderForm,clientId:e.target.value})} error={errs.clientId} options={[{value:"",label:"Выберите"},...clients.map(c=>({value:c.id,label:`${c.name}${c.status!=="active"?" (!)":""}`}))]}/>
           <Sel label="Приоритет" value={orderForm.priority||"нормальный"} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})} options={ORDER_PRIORITIES.map(p=>({value:p,label:p}))}/>
           <Sel label="Источник" value={orderForm.source||"WhatsApp"} onChange={e=>setOrderForm({...orderForm,source:e.target.value})} options={ORDER_SOURCES.map(s=>({value:s,label:s}))}/>
         </div>
-        {orderForm.clientId&&(()=>{const st=clients.find(c=>c.id===+orderForm.clientId);return st?.status==="blacklist"?<div style={{padding:"8px 12px",background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:7,fontSize:12,color:C.danger,marginBottom:8}}>⚠ Магазин в чёрном списке: {st.blockReason||"причина не указана"}</div>:st?.status==="blocked"?<div style={{padding:"8px 12px",background:`${C.orange}15`,border:`1px solid ${C.orange}30`,borderRadius:7,fontSize:12,color:C.orange,marginBottom:8}}>⚠ Магазин заблокирован</div>:null;})()}
+        {orderForm.clientId&&(()=>{const st=clients.find(c=>c.id===+orderForm.clientId);return st?.status==="blacklist"?<div style={{padding:"8px 12px",background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:7,fontSize:12,color:C.danger,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин заблокирован{st.blockReason?`: ${st.blockReason}`:""}</div>:st?.status==="blocked"?<div style={{padding:"8px 12px",background:`${C.orange}15`,border:`1px solid ${C.orange}30`,borderRadius:7,fontSize:12,color:C.orange,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин заблокирован</div>:null;})()}
         <div style={{marginBottom:12}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <label style={{fontSize:12,fontWeight:500,color:C.muted}}>Товары</label>

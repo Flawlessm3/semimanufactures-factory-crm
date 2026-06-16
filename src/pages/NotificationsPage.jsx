@@ -1,21 +1,27 @@
-import { useState, useEffect, useCallback, useMemo, useContext, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area } from "recharts";
+import { useState, useMemo, useContext } from "react";
 import { AppContext } from "../context/AppContext.js";
-import { ROLES, JOB_TITLES, PAY_TYPES, STORE_STATUSES, STORE_STATUS_LABELS, ORDER_SOURCES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS, BATCH_STATUSES, DEFECT_REASONS, PAYROLL_STATUSES, CATEGORIES, UNITS, STATUSES, TASK_STATUSES, RAW_CATEGORIES, RAW_UNITS, NOTIF_TYPES, MARK_TYPES, PLAN_STATUSES, ORDER_STATUSES, ORDER_PRIORITIES, BOARD_COLUMNS, MOVEMENT_TYPES, DEBT_STATUSES, CAMERA_SOURCE_TYPES, CAMERA_SOURCE_LABELS, CAMERA_ZONES } from "../constants/index.js";
-import { fmtDate, fmtShort, fmtTime, daysBetween, relTime } from "../utils/dates.js";
-import { C, CC } from "../theme/colors.js";
+import { ROLES, NOTIF_TYPES } from "../constants/index.js";
+import { fmtDate, relTime } from "../utils/dates.js";
+import { buildDashboardWarnings } from "../utils/dashboardWarnings.js";
+import { isWarningHidden } from "../utils/hiddenWarnings.js";
+import { C } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
 import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Stat, Toast, TH, TD, Card, Title, PageH, SearchBox } from "../components/ui/index.jsx";
 
 // NOTIFICATIONS PAGE
 const NotificationsPage = ()=>{
-  const {notifications,setNotifications,setNotifsL,users,currentUser,addLog}=useContext(AppContext);
+  const {
+    notifications,setNotifications,setNotifsL,users,currentUser,addLog,
+    rawMaterials,products,tasks,marks,productionOutputs,debts,
+    hiddenWarningsMap,hideWarningItem,restoreWarningItem,
+  } = useContext(AppContext);
   const [modal,setModal]=useState(false);
   const [edit,setEdit]=useState(null);
   const [confirm,setConfirm]=useState(null);
   const [toast,setToast]=useState(null);
   const [search,setSearch]=useState("");
   const [fType,setFType]=useState("all");
+  const [fScope,setFScope]=useState("active");
   const [errs,setErrs]=useState({});
   const role=ROLES.find(r=>r.id===currentUser.roleId);
   const isAdmin=role?.name==="admin"||role?.name==="owner";
@@ -23,12 +29,38 @@ const NotificationsPage = ()=>{
   const empty={title:"",type:"информация",content:"",targetAll:true,targetUsers:[]};
   const [form,setForm]=useState(empty);
 
-  const visible=useMemo(()=>{
-    let list=isAdmin?[...notifications]:notifications.filter(n=>n.targetAll||n.targetUsers?.includes(currentUser.id));
-    if(search)list=list.filter(n=>n.title.toLowerCase().includes(search.toLowerCase())||n.content.toLowerCase().includes(search.toLowerCase()));
-    if(fType!=="all")list=list.filter(n=>n.type===fType);
+  const baseNotifications = useMemo(() => {
+    const list = isAdmin
+      ? [...(notifications || [])]
+      : (notifications || []).filter(n => n.targetAll || n.targetUsers?.includes(currentUser.id));
+    return list.map(n => ({ ...n, kind: "notification" }));
+  }, [notifications, isAdmin, currentUser]);
+
+  const warningItems = useMemo(() => {
+    return buildDashboardWarnings({
+      rawMaterials,
+      products,
+      tasks,
+      users,
+      marks,
+      productionOutputs,
+      debts,
+    }).map(w => ({ ...w, kind: "warning", hidden: isWarningHidden(hiddenWarningsMap, w.warningId || w.id) }));
+  }, [rawMaterials, products, tasks, users, marks, productionOutputs, debts, hiddenWarningsMap]);
+
+  const hasWarnings = warningItems.length > 0;
+
+  const visible = useMemo(() => {
+    let list = [...warningItems, ...baseNotifications];
+    if (fScope === "hidden") list = list.filter(n => n.kind === "warning" && n.hidden);
+    else list = list.filter(n => n.kind !== "warning" || !n.hidden);
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(n => `${n.title || ""} ${n.content || ""}`.toLowerCase().includes(q));
+    }
+    if (fType !== "all") list = list.filter(n => n.type === fType);
     return list.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  },[notifications,search,fType,isAdmin,currentUser]);
+  }, [warningItems, baseNotifications, fScope, search, fType]);
 
   // Workers cannot write to dk_notifications directly — use the action endpoint
   // so they can still mark notifications as read for themselves.
@@ -65,47 +97,58 @@ const NotificationsPage = ()=>{
   const del=n=>{setConfirm({title:"Удалить уведомление?",message:`Удалить «${n.title}»?`,onConfirm:()=>{setNotifications(p=>p.filter(x=>x.id!==n.id));addLog(`Удалено уведомление: ${n.title}`);setToast({message:"Удалено",type:"error"});setConfirm(null)}})};
 
   const nColor=t=>t==="ошибка"?"danger":t==="предупреждение"?"orange":"info";
-  const nIcon=t=>t==="ошибка"?<I.alert size={16}/>:t==="предупреждение"?<I.alert size={16}/>:<I.bell size={16}/>;
+  const nIcon=(n)=>n.kind==="warning"||n.type==="ошибка"||n.type==="предупреждение"?<I.alert size={16}/>:<I.bell size={16}/>;
 
   return(
     <div>
       <PageH title="Уведомления">
         <SearchBox value={search} onChange={e=>setSearch(e.target.value)}/>
         <select value={fType} onChange={e=>setFType(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}><option value="all">Все типы</option>{NOTIF_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
+        {hasWarnings&&(
+          <select value={fScope} onChange={e=>setFScope(e.target.value)} style={{padding:"7px 9px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12,fontFamily:"inherit"}}>
+            <option value="active">Активные</option>
+            <option value="hidden">Скрытые</option>
+          </select>
+        )}
         {isAdmin&&<Btn onClick={openNew} icon={<I.plus size={15}/>}>Создать</Btn>}
       </PageH>
       <div style={{display:"grid",gap:10}}>
         {visible.map(n=>{
-          const isRead=n.readBy?.includes(currentUser.id);
+          const isWarning=n.kind==="warning";
+          const isRead=isWarning?false:n.readBy?.includes(currentUser.id);
           const author=n.createdBy===0?"Система":users.find(u=>u.id===n.createdBy)?.name?.split(" ").slice(0,2).join(" ")||"Система";
+          const mutedHidden=isWarning&&n.hidden;
           return(
-            <Card key={n.id} s={{padding:"14px 18px",borderLeft:`3px solid ${n.type==="ошибка"?C.danger:n.type==="предупреждение"?C.orange:C.info}`,opacity:isRead?.85:1}}>
+            <Card key={n.id} s={{padding:"12px 14px",opacity:isRead||mutedHidden?0.66:1}}>
               <div style={{display:"flex",flexWrap:"wrap",alignItems:"flex-start",gap:12}}>
-                <div style={{width:34,height:34,borderRadius:8,background:`${n.type==="ошибка"?C.danger:n.type==="предупреждение"?C.orange:C.info}15`,color:n.type==="ошибка"?C.danger:n.type==="предупреждение"?C.orange:C.info,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{nIcon(n.type)}</div>
+                <div style={{width:30,height:30,borderRadius:8,background:`${n.type==="ошибка"?C.danger:n.type==="предупреждение"?C.orange:C.info}15`,color:n.type==="ошибка"?C.danger:n.type==="предупреждение"?C.orange:C.info,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{nIcon(n)}</div>
                 <div style={{flex:1,minWidth:200}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-                    <span style={{fontSize:14,fontWeight:isRead?500:700,color:C.text}}>{n.title}</span>
-                    {!isRead&&<div style={{width:7,height:7,borderRadius:"50%",background:C.primary}}/>}
-                    <Badge color={nColor(n.type)}>{n.type}</Badge>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,minWidth:0}}>
+                    <span className="notification-title" style={{fontSize:13,fontWeight:isRead?500:700,color:C.text}}>{n.title}</span>
+                    {!isRead&&!isWarning&&<div style={{width:6,height:6,borderRadius:"50%",background:C.primary,flexShrink:0}}/>}
+                    <Badge color={nColor(n.type)} s={{fontSize:10}}>{n.type}</Badge>
                   </div>
-                  <div style={{fontSize:13,color:C.muted,lineHeight:1.5,marginBottom:4}}>{n.content}</div>
-                  <div style={{fontSize:11,color:C.dim,display:"flex",gap:12,flexWrap:"wrap"}}>
+                  <div className="notification-body" style={{fontSize:12,color:C.muted,lineHeight:1.45,marginBottom:4}}>{n.content}</div>
+                  <div style={{fontSize:10,color:C.dim,display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <span>{relTime(n.createdAt)}</span>
                     <span>{fmtDate(n.createdAt)}</span>
-                    <span>Автор: {author}</span>
-                    {n.targetAll?<span>Для всех</span>:<span>Для: {n.targetUsers?.map(uid=>users.find(u=>u.id===uid)?.name?.split(" ")[0]).join(", ")}</span>}
+                    {isWarning?<span>Предупреждение панели</span>:<span>Автор: {author}</span>}
+                    {!isWarning&&(n.targetAll?<span>Для всех</span>:<span>Для: {n.targetUsers?.map(uid=>users.find(u=>u.id===uid)?.name?.split(" ")[0]).join(", ")}</span>)}
                   </div>
                 </div>
                 <div style={{display:"flex",gap:5,flexShrink:0}}>
-                  {!isRead&&<Btn v="ghost" sz="sm" onClick={()=>markRead(n.id)}>Прочитано</Btn>}
-                  {isAdmin&&<Btn v="ghost" sz="sm" onClick={()=>openEdit(n)} icon={<I.edit size={13}/>}/>}
-                  {isAdmin&&<Btn v="ghost" sz="sm" onClick={()=>del(n)} icon={<I.trash size={13}/>}/>}
+                  {!isWarning&&!isRead&&<Btn v="ghost" sz="sm" onClick={()=>markRead(n.id)}>Прочитано</Btn>}
+                  {isWarning&&!n.hidden&&<Btn v="ghost" sz="sm" onClick={()=>hideWarningItem(n.warningId||n.id)}>Скрыть</Btn>}
+                  {isWarning&&n.hidden&&<Btn v="ghost" sz="sm" onClick={()=>restoreWarningItem(n.warningId||n.id)}>Вернуть</Btn>}
+                  {isAdmin&&!isWarning&&<Btn v="ghost" sz="sm" onClick={()=>openEdit(n)} icon={<I.edit size={13}/>}/>}
+                  {isAdmin&&!isWarning&&<Btn v="ghost" sz="sm" onClick={()=>del(n)} icon={<I.trash size={13}/>}/>}
                 </div>
               </div>
             </Card>
           );
         })}
       </div>
-      {visible.length===0&&<div style={{textAlign:"center",padding:50,color:C.dim}}><I.bell size={36}/><p style={{marginTop:10}}>Нет уведомлений</p></div>}
+      {visible.length===0&&<div style={{textAlign:"center",padding:50,color:C.dim}}><I.bell size={36}/><p style={{marginTop:10}}>{fScope==="hidden"?"Нет скрытых предупреждений":"Нет уведомлений"}</p></div>}
 
       <Modal open={modal} onClose={()=>setModal(false)} title={edit?"Редактировать":"Новое уведомление"} width={520}>
         <Inp label="Заголовок" value={form.title} onChange={e=>setForm({...form,title:e.target.value})} error={errs.title}/>
