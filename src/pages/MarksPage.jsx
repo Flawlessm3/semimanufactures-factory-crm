@@ -1,13 +1,19 @@
-import { useState, useMemo, useContext } from "react";
+import { useState, useMemo, useContext, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { AppContext } from "../context/AppContext.js";
 import { ROLES, ATTENDANCE_TYPES, ATTENDANCE_TYPE_COLORS } from "../constants/index.js";
 import { fmtShort } from "../utils/dates.js";
 import { formatTime } from "../utils/formatters.js";
 import { getAttendanceViewState } from "../utils/attendanceView.js";
+import { getPresenceDays } from "../utils/attendanceStats.js";
+import { buildEmployeeProductionHistory } from "../utils/productionHistory.js";
 import { toneColors } from "../theme/colors.js";
 import { C } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
-import { Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card } from "../components/ui/index.jsx";
+import { Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card, EmptyState } from "../components/ui/index.jsx";
+import { apiFetch } from "../api/client.js";
+import { useAppMotion } from "../motion/MotionProvider.jsx";
+import { spring } from "../motion/presets.js";
 
 const actionIcon = (name) => {
   if (name === "check") return <I.check size={13} />;
@@ -15,13 +21,21 @@ const actionIcon = (name) => {
   return undefined;
 };
 
-const AttendanceRow = ({ worker, viewState, onAction }) => {
+const fxClassForType = (type) => {
+  if (type === "приход" || type === "опоздание") return "success";
+  if (type === "уход") return "info";
+  if (type === "отсутствие") return "danger";
+  return "success";
+};
+
+const AttendanceRow = ({ worker, viewState, onAction, isJustMarked, fxTone }) => {
   const toneClr = toneColors[viewState.tone] || toneColors.neutral;
   const outputTone = viewState.outputQty > 0 ? "success" : "neutral";
   const roleLabel = worker.jobTitle || ROLES.find(r => r.id === worker.roleId)?.label || "—";
+  const fxClass = isJustMarked ? ` is-just-marked is-just-marked-${fxTone || "success"}` : "";
 
   return (
-    <div className="attendance-row" data-status={viewState.status}>
+    <div className={`attendance-row${fxClass}`} data-status={viewState.status}>
       <div className="attendance-person-cell">
         <div className="attendance-avatar" style={{ background: `${toneClr}20`, color: toneClr }}>
           {worker.name.charAt(0)}
@@ -83,13 +97,17 @@ const AttendanceRow = ({ worker, viewState, onAction }) => {
 };
 
 const MarksPage = () => {
-  const { marks, setMarks, users, productionOutputs, currentUser, addLog, applyServerState } = useContext(AppContext);
+  const { marks, setMarks, users, productionOutputs, currentUser, applyServerState } = useContext(AppContext);
+  const { reduceMotion } = useAppMotion();
   const [modal, setModal] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [toast, setToast] = useState(null);
   const [fDate, setFDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [fType, setFType] = useState("all");
   const [errs, setErrs] = useState({});
+  const [recentAttendanceFx, setRecentAttendanceFx] = useState(null);
+  const [workerPanelFx, setWorkerPanelFx] = useState(false);
+
   const role = ROLES.find(r => r.id === currentUser.roleId);
   const isAdmin = role?.name === "admin" || role?.name === "owner";
   const isManager = role?.name === "manager";
@@ -108,12 +126,24 @@ const MarksPage = () => {
   };
   const [form, setForm] = useState(emptyForm);
 
+  useEffect(() => {
+    if (!recentAttendanceFx) return undefined;
+    const t = setTimeout(() => setRecentAttendanceFx(null), 800);
+    return () => clearTimeout(t);
+  }, [recentAttendanceFx]);
+
+  useEffect(() => {
+    if (!workerPanelFx) return undefined;
+    const t = setTimeout(() => setWorkerPanelFx(false), 800);
+    return () => clearTimeout(t);
+  }, [workerPanelFx]);
+
   const dateMarks = useMemo(() => {
     let l = isWorker ? marks.filter(m => m.employeeId === currentUser.id) : marks;
     l = l.filter(m => (m.time || m.createdAt || "").slice(0, 10) === fDate);
     if (fType !== "all") l = l.filter(m => m.type === fType || m.markType === fType);
     return l.sort((a, b) => new Date(a.time || a.createdAt) - new Date(b.time || b.createdAt));
-  }, [marks, fDate, fType, isWorker, currentUser, users]);
+  }, [marks, fDate, fType, isWorker, currentUser]);
 
   const todayByWorker = useMemo(() => {
     const today = marks.filter(m => (m.time || m.createdAt || "").slice(0, 10) === todayStr);
@@ -150,13 +180,24 @@ const MarksPage = () => {
     return { onShift, notMarked, finished, total: workers.length };
   }, [workers, todayByWorker]);
 
+  const triggerFx = (employeeId, type) => {
+    setRecentAttendanceFx({ employeeId, type, ts: Date.now(), tone: fxClassForType(type) });
+    if (employeeId === currentUser.id && (type === "приход" || type === "опоздание")) {
+      setWorkerPanelFx(true);
+    }
+  };
+
   const postAttendance = async (employeeId, type, extra = {}) => {
     try {
-      const r = await fetch("/api/actions/attendance-mark", {
+      const r = await apiFetch("/api/actions/attendance-mark", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ employeeId, type, ...extra }),
       });
+      if (!r) {
+        setToast({ message: "Нет связи с сервером", type: "error" });
+        return false;
+      }
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         setToast({ message: err.error || "Не удалось отметить", type: "error" });
@@ -164,6 +205,7 @@ const MarksPage = () => {
       }
       const data = await r.json();
       if (data.state) applyServerState(data.state);
+      triggerFx(employeeId, type);
       return true;
     } catch {
       setToast({ message: "Нет связи с сервером", type: "error" });
@@ -184,27 +226,22 @@ const MarksPage = () => {
     }
   };
 
-  const saveModal = () => {
+  const saveModal = async () => {
     const e = {};
     if (!form.employeeId) e.employeeId = "!";
     if (!form.type) e.type = "!";
     setErrs(e);
     if (Object.keys(e).length) return;
-    const now = new Date().toISOString();
-    setMarks(p => [...p, {
-      id: Date.now(),
-      employeeId: +form.employeeId,
-      type: form.type,
-      time: form.time ? new Date(form.time).toISOString() : now,
+
+    const ok = await postAttendance(+form.employeeId, form.type, {
+      time: form.time ? new Date(form.time).toISOString() : undefined,
       reason: form.reason,
       comment: form.comment,
-      createdBy: currentUser.id,
-      createdAt: now,
-    }]);
-    const empName = users.find(u => u.id === +form.employeeId)?.name?.split(" ")[0] || "";
-    addLog(`${form.type}: ${empName} (${form.comment || "—"})`);
-    setToast({ message: "Отметка добавлена", type: "success" });
-    setModal(false);
+    });
+    if (ok) {
+      setToast({ message: "Отметка добавлена", type: "success" });
+      setModal(false);
+    }
   };
 
   const delMark = m => {
@@ -233,12 +270,7 @@ const MarksPage = () => {
       <header className="marks-page-header">
         <h1 className="marks-page-title">Посещаемость / Смена</h1>
         <div className="marks-page-actions">
-          <input
-            type="date"
-            className="marks-filter-input"
-            value={fDate}
-            onChange={e => setFDate(e.target.value)}
-          />
+          <input type="date" className="marks-filter-input" value={fDate} onChange={e => setFDate(e.target.value)} />
           <select className="marks-filter-input" value={fType} onChange={e => setFType(e.target.value)}>
             <option value="all">Все типы</option>
             {ATTENDANCE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -263,7 +295,7 @@ const MarksPage = () => {
       )}
 
       {isWorker && fDate === todayStr && workerView && (
-        <Card className="marks-worker-panel">
+        <Card className={`marks-worker-panel${workerPanelFx ? " is-marked-success" : ""}`}>
           <div className="marks-worker-panel-title">Моя смена сегодня</div>
           <div className="marks-worker-actions">
             {workerView.actions.map(action => (
@@ -277,11 +309,21 @@ const MarksPage = () => {
                 {action.label}
               </Btn>
             ))}
-            {workerView.readonlyLabel && (
-              <span className="attendance-readonly-pill" data-tone={workerView.tone}>
-                {workerView.readonlyLabel}
-              </span>
-            )}
+            <AnimatePresence mode="wait">
+              {workerView.readonlyLabel && (
+                <motion.span
+                  key={workerView.readonlyLabel}
+                  className="attendance-readonly-pill"
+                  data-tone={workerView.tone}
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.92 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={reduceMotion ? undefined : { opacity: 0, scale: 0.92 }}
+                  transition={reduceMotion ? { duration: 0 } : spring.snappy}
+                >
+                  {workerView.readonlyLabel}
+                </motion.span>
+              )}
+            </AnimatePresence>
             {workerView.checkInTime && (
               <span className="attendance-time-line">
                 <span className="attendance-time-label">Приход:</span>
@@ -317,6 +359,8 @@ const MarksPage = () => {
                 worker={w}
                 viewState={getAttendanceViewState(todayByWorker[w.id])}
                 onAction={quickMark}
+                isJustMarked={recentAttendanceFx?.employeeId === w.id && Date.now() - recentAttendanceFx.ts < 800}
+                fxTone={recentAttendanceFx?.employeeId === w.id ? recentAttendanceFx.tone : undefined}
               />
             ))}
           </div>
@@ -343,9 +387,7 @@ const MarksPage = () => {
                 const typeClr = ATTENDANCE_TYPE_COLORS[type] || "info";
                 return (
                   <tr key={m.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <TD s={{ fontSize: 12, whiteSpace: "nowrap", color: C.muted }}>
-                      {formatTime(m.time || m.createdAt)}
-                    </TD>
+                    <TD s={{ fontSize: 12, whiteSpace: "nowrap", color: C.muted }}>{formatTime(m.time || m.createdAt)}</TD>
                     <TD s={{ fontWeight: 500 }}>{emp?.name?.split(" ").slice(0, 2).join(" ") || "—"}</TD>
                     <TD><Badge color={typeClr}>{type}</Badge></TD>
                     <TD s={{ fontSize: 12, color: C.muted }}>{m.reason || "—"}</TD>
@@ -371,13 +413,7 @@ const MarksPage = () => {
       </Card>
 
       <Modal open={modal} onClose={() => setModal(false)} title="Добавить отметку" width={440}>
-        <Sel
-          label="Сотрудник"
-          value={form.employeeId}
-          onChange={e => setForm({ ...form, employeeId: e.target.value })}
-          error={errs.employeeId}
-          options={[{ value: "", label: "Выберите" }, ...workers.map(w => ({ value: w.id, label: w.name.split(" ").slice(0, 2).join(" ") }))]}
-        />
+        <Sel label="Сотрудник" value={form.employeeId} onChange={e => setForm({ ...form, employeeId: e.target.value })} error={errs.employeeId} options={[{ value: "", label: "Выберите" }, ...workers.map(w => ({ value: w.id, label: w.name.split(" ").slice(0, 2).join(" ") }))]} />
         <Sel label="Событие" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} options={ATTENDANCE_TYPES.map(t => ({ value: t, label: t }))} />
         <Inp label="Время (факт)" type="datetime-local" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} />
         {(form.type === "опоздание" || form.type === "отсутствие") && (

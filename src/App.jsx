@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { motion, AnimatePresence, LayoutGroup } from "motion/react";
+import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "motion/react";
 import { AppContext } from "./context/AppContext.js";
 import { ROLES } from "./constants/index.js";
 import { INIT_USERS, INIT_PRODUCTS, INIT_RAW_MATERIALS, INIT_RECIPES, INIT_TASKS, INIT_TASK_EMPLOYEES, INIT_EMPLOYEE_HISTORY, INIT_PRODUCTION_PLANS, INIT_CLIENTS, INIT_CLIENT_ORDERS, INIT_SALES, INIT_INVENTORY_MOVEMENTS, INIT_SUPPLIERS, INIT_DELIVERIES, INIT_RAW_MOVEMENTS, INIT_NOTIFICATIONS, INIT_MARKS, INIT_PRODUCTION_OUTPUTS, INIT_DEBTS, INIT_BATCHES, INIT_DEFECTS, INIT_CAMERAS, INIT_BONUS_RULES, INIT_BASE_SALARIES } from "./data/initState.js";
@@ -48,6 +48,9 @@ import { getJobProfile, isManagerLike, isSuperAdmin, roleChipLabel, pageTitle } 
 import { formatMoney } from "./utils/formatters.js";
 import { APP_BRAND, APP_TAGLINE } from "./constants/brand.js";
 import { loadHiddenWarnings, hideWarning, restoreWarning } from "./utils/hiddenWarnings.js";
+import { buildBaseNavGroups } from "./navigation/modules.js";
+import { applyNavLayout } from "./utils/navigation.js";
+import { NavSettingsModal } from "./components/layout/NavSettingsModal.jsx";
 
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════
@@ -87,7 +90,7 @@ export default function App(){
     const t=setInterval(checkMe,2*60*1000); // re-check every 2 min
     return()=>{mounted=false;clearInterval(t);};
   },[]);
-  const [users,setUsers]=usePersisted("dk_users",INIT_USERS);
+  const [users,setUsers,setUsersL]=usePersisted("dk_users",INIT_USERS);
   const [products,setProducts,setProductsL]=usePersisted("dk_products",INIT_PRODUCTS);
   const [tasks,setTasks,setTasksL]=usePersisted("dk_tasks",INIT_TASKS);
   const [rawMaterials,setRawMaterials,setRawMatsL]=usePersisted("dk_raw_mats",INIT_RAW_MATERIALS);
@@ -101,7 +104,7 @@ export default function App(){
   const [inventoryMovements,setInventoryMovements,setInvMoveL]=usePersisted("dk_inv_move",INIT_INVENTORY_MOVEMENTS);
   const [productionOutputs,setProductionOutputs,setOutputsL]=usePersisted("dk_prod_outputs",INIT_PRODUCTION_OUTPUTS);
   const [bonusRules,setBonusRules]=usePersisted("dk_bonus_rules",INIT_BONUS_RULES);
-  const [baseSalaries,setBaseSalaries]=usePersisted("dk_base_salaries",INIT_BASE_SALARIES);
+  const [baseSalaries,setBaseSalaries,setBaseSalariesL]=usePersisted("dk_base_salaries",INIT_BASE_SALARIES);
   const [debts,setDebts]=usePersisted("dk_debts",INIT_DEBTS);
   const [batches,setBatches,setBatchesL]=usePersisted("dk_batches",INIT_BATCHES);
   const [defects,setDefects]=usePersisted("dk_defects",INIT_DEFECTS);
@@ -111,10 +114,12 @@ export default function App(){
   const [deliveries,setDeliveries]=usePersisted("dk_deliveries",INIT_DELIVERIES);
   const [rawMovements,setRawMovements,setRawMovsL]=usePersisted("dk_raw_movements",INIT_RAW_MOVEMENTS);
   const [notifications,setNotifications,setNotifsL]=usePersisted("dk_notifications",INIT_NOTIFICATIONS);
-  const [marks,setMarks]=usePersisted("dk_marks",INIT_MARKS);
+  const [marks,setMarks,setMarksL]=usePersisted("dk_marks",INIT_MARKS);
   const [logs,setLogs,setLogsL]=usePersisted("dk_logs",[]);
+  const [navLayout,setNavLayout]=usePersisted("dk_nav_layout",null);
   const [page,setPage]=useState("dashboard");
   const [sideOpen,setSideOpen]=useState(false);
+  const [navSettingsOpen,setNavSettingsOpen]=useState(false);
   const [openGroups,setOpenGroups]=useState(()=>new Set(["main"]));
   const [hiddenWarningsMap,setHiddenWarningsMap]=useState(()=>loadHiddenWarnings());
   const hideWarningItem=useCallback((id)=>setHiddenWarningsMap(m=>hideWarning(m,id)),[]);
@@ -162,8 +167,10 @@ export default function App(){
     if(state.dk_notifications)  setNotifsL(state.dk_notifications);
     if(state.dk_logs)           setLogsL(state.dk_logs);
     if(state.dk_client_orders)  setClientOrdersL(state.dk_client_orders);
-    if(state.dk_inv_move)       setInvMoveL(state.dk_inv_move);
-  },[setTasksL,setTaskEmpL,setOutputsL,setBatchesL,setProductsL,setRawMatsL,setRawMovsL,setInvMoveL,setEmpHistL,setPlansL,setNotifsL,setLogsL,setClientOrdersL]);
+    if(state.dk_marks)          setMarksL(state.dk_marks);
+    if(state.dk_users)          setUsersL(state.dk_users);
+    if(state.dk_base_salaries)  setBaseSalariesL(state.dk_base_salaries);
+  },[setTasksL,setTaskEmpL,setOutputsL,setBatchesL,setProductsL,setRawMatsL,setRawMovsL,setInvMoveL,setEmpHistL,setPlansL,setNotifsL,setLogsL,setClientOrdersL,setMarksL,setUsersL,setBaseSalariesL]);
 
   const addLog=useCallback(msg=>{
     if(!currentUser) return;
@@ -308,6 +315,8 @@ export default function App(){
   }),[users,products,tasks,rawMaterials,recipes,taskEmployees,employeeHistory,productionPlans,clients,clientOrders,sales,inventoryMovements,suppliers,deliveries,rawMovements,notifications,marks,logs,addLog,addNotification,currentUser,production,page,hiddenWarningsMap,hideWarningItem,restoreWarningItem,productionOutputs,bonusRules,baseSalaries,debts,batches,defects,payrollRecords,cameras,applyOutput,revertOutput,applyServerState,setClientOrdersL]);
 
   const pageVariants = useMotionVariants(pageTransition);
+  const reduceMotion = useReducedMotion();
+  const navLayoutTransition = reduceMotion ? { duration: 0 } : spring.soft;
 
   const globalStyles = `
     :root{
@@ -682,6 +691,10 @@ export default function App(){
     .product-delete-btn{width:38px;height:38px;flex:0 0 auto;border-radius:12px;padding:0;display:inline-flex;align-items:center;justify-content:center}
     .money-text,.number-text{font-variant-numeric:tabular-nums;white-space:nowrap}
     .single-line{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .page-filter-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+    .page-summary-row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+    .inventory-journal-table th,.inventory-journal-table td{padding:10px 12px;white-space:nowrap}
+    .raw-materials-page,.inventory-journal-page{display:grid;gap:0;min-width:0}
     .two-line{min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .dashboard-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;min-width:0}
     .notification-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -709,6 +722,52 @@ export default function App(){
     .marks-page .attendance-summary-card[data-tone="primary"] .attendance-summary-value{color:${C.primary}}
     @media(max-width:900px){.marks-page .attendance-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:460px){.marks-page .attendance-summary-grid{grid-template-columns:1fr}}
+    .procurement-page{display:grid;gap:18px;padding-bottom:28px;min-width:0}
+    .procurement-summary{display:flex;flex-wrap:wrap;gap:12px;min-width:0}
+    .procurement-filter-pills{display:inline-flex;gap:6px;flex-wrap:wrap}
+    .procurement-filter-pill{
+      padding:7px 12px;border-radius:999px;border:1px solid ${C.border};
+      background:${C.surface};color:${C.muted};font-size:12px;font-weight:600;
+      cursor:pointer;font-family:inherit;transition:background .18s ease,border-color .18s ease,color .18s ease;
+    }
+    .procurement-filter-pill:hover{background:${C.surface2};color:${C.text}}
+    .procurement-filter-pill.is-active{background:${C.primaryBg};border-color:${C.primary}40;color:${C.primary}}
+    .procurement-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;min-width:0}
+    .procurement-buy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;min-width:0}
+    .procurement-buy-card{
+      min-width:0;padding:14px 16px;border-radius:16px;
+      background:linear-gradient(180deg,rgba(255,107,95,.10),rgba(255,255,255,.035));
+      border:1px solid rgba(255,107,95,.18);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+    }
+    .procurement-buy-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px;min-width:0}
+    .procurement-buy-card-title{font-size:14px;line-height:1.25;font-weight:700;color:${C.text};min-width:0}
+    .procurement-buy-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .procurement-buy-metric{min-width:0;display:grid;gap:3px}
+    .procurement-buy-metric-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:${C.dim}}
+    .procurement-buy-metric-value{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:${C.text}}
+    .procurement-buy-metric--shortage .procurement-buy-metric-value{color:${C.danger}}
+    .procurement-table-row{border-bottom:1px solid ${C.border};transition:background .15s ease}
+    .procurement-table-row--shortage{background:${C.dangerBg}}
+    .procurement-plan-grid{display:grid;gap:12px;min-width:0}
+    .procurement-plan-card{
+      min-width:0;padding:14px 16px;border-radius:16px;
+      background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.025));
+      border:1px solid rgba(255,255,255,.09);
+    }
+    .procurement-plan-card[data-status="active"]{border-left:3px solid ${C.primary}}
+    .procurement-plan-card[data-status="planned"]{border-left:3px solid ${C.info}}
+    .procurement-plan-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;min-width:0}
+    .procurement-plan-card-main{min-width:0;display:grid;gap:4px}
+    .procurement-plan-product{font-size:14px;font-weight:700;color:${C.text}}
+    .procurement-plan-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:${C.dim}}
+    .procurement-plan-progress{margin-bottom:12px}
+    .procurement-plan-progress-labels{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:11px;color:${C.muted}}
+    .procurement-plan-progress-track{height:6px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
+    .procurement-plan-progress-fill{height:100%;border-radius:999px;transition:width .3s ease}
+    .procurement-plan-items{display:flex;flex-wrap:wrap;gap:6px}
+    .procurement-plan-empty{font-size:12px;color:${C.dim}}
+    @media(max-width:640px){.procurement-buy-metrics{grid-template-columns:1fr}}
     .attendance-panel{padding:20px !important;border-radius:22px;overflow:hidden}
     .attendance-panel-header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px;min-width:0}
     .attendance-panel-title{font-size:16px;line-height:1.2;font-weight:850;color:${C.text}}
@@ -730,6 +789,21 @@ export default function App(){
     .attendance-row[data-status="missing"]{border-left:3px solid rgba(242,168,75,.65)}
     .attendance-row[data-status="closed"]{border-left:3px solid rgba(121,184,216,.60)}
     .attendance-row[data-status="absent"]{border-left:3px solid rgba(255,107,95,.65)}
+    .attendance-row.is-just-marked{position:relative;overflow:hidden}
+    .attendance-row.is-just-marked-success{animation:attendanceMarkSuccess .72s cubic-bezier(.16,1,.3,1) both;box-shadow:0 0 0 1px rgba(90,158,95,.28),0 8px 24px rgba(90,158,95,.08)}
+    .attendance-row.is-just-marked-info{animation:attendanceMarkInfo .72s cubic-bezier(.16,1,.3,1) both}
+    .attendance-row.is-just-marked-danger{animation:attendanceMarkDanger .72s cubic-bezier(.16,1,.3,1) both}
+    .attendance-row.is-just-marked::after{
+      content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+      background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.08) 50%,transparent 65%);
+      transform:translateX(-120%);animation:attendanceSweep .8s cubic-bezier(.16,1,.3,1) both;
+    }
+    @keyframes attendanceMarkSuccess{0%{box-shadow:0 0 0 0 rgba(90,158,95,0)}50%{box-shadow:0 0 0 3px rgba(90,158,95,.22)}100%{box-shadow:0 0 0 1px rgba(90,158,95,.12)}}
+    @keyframes attendanceMarkInfo{0%{box-shadow:0 0 0 0 rgba(91,141,181,0)}50%{box-shadow:0 0 0 3px rgba(91,141,181,.18)}100%{box-shadow:none}}
+    @keyframes attendanceMarkDanger{0%{box-shadow:0 0 0 0 rgba(196,78,61,0)}50%{box-shadow:0 0 0 3px rgba(196,78,61,.22)}100%{box-shadow:none}}
+    @keyframes attendanceSweep{to{transform:translateX(120%)}}
+    .marks-worker-panel.is-marked-success{animation:attendancePanelGlow .72s cubic-bezier(.16,1,.3,1) both}
+    @keyframes attendancePanelGlow{0%{box-shadow:0 0 0 0 rgba(90,158,95,0)}50%{box-shadow:0 0 0 2px rgba(90,158,95,.24)}100%{box-shadow:none}}
     .attendance-person-cell{min-width:0;display:flex;align-items:center;gap:12px}
     .attendance-avatar{width:38px;height:38px;flex:0 0 auto;border-radius:12px;display:grid;place-items:center;font-weight:700;font-size:14px}
     .attendance-person-info{min-width:0;display:grid;gap:3px}
@@ -821,16 +895,37 @@ export default function App(){
     .store-card.is-blacklisted .strikeable-text::after{width:calc(100% + 4px)}
     .store-card.is-blacklisted .strikeable-muted::after{width:100%}
     .store-card.is-blacklisted .strikeable-muted{color:rgba(248,241,229,.58)}
-    .store-blacklist-badge{
-      display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:5px 9px;border-radius:999px;
-      font-size:11px;font-weight:800;color:rgba(255,132,121,.96);background:rgba(255,107,95,.13);border:1px solid rgba(255,107,95,.22);
-    }
     .store-block-reason{
       display:inline-flex;align-items:center;gap:8px;margin-top:10px;max-width:100%;padding:8px 10px;border-radius:12px;
       color:rgba(255,132,121,.92);background:rgba(255,107,95,.08);border:1px solid rgba(255,107,95,.14);
       font-size:12px;line-height:1.25;position:relative;z-index:1;
     }
     .store-block-reason span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .store-card.is-blocking-fx{animation:storeBlockFx .72s cubic-bezier(.16,1,.3,1) both}
+    .store-card.is-unblocking-fx{animation:storeUnblockFx .72s cubic-bezier(.16,1,.3,1) both}
+    @keyframes storeBlockFx{
+      0%{transform:scale(1);box-shadow:0 0 0 0 rgba(196,78,61,0)}
+      20%{transform:scale(.992) translateX(-1px);box-shadow:0 0 0 3px rgba(196,78,61,.28)}
+      40%{transform:scale(.998) translateX(1px)}
+      100%{transform:scale(1);box-shadow:inset 3px 0 0 rgba(255,107,95,.82),0 18px 50px rgba(0,0,0,.22)}
+    }
+    @keyframes storeUnblockFx{
+      0%{transform:scale(1);box-shadow:0 0 0 0 rgba(90,158,95,0)}
+      35%{transform:scale(1.008);box-shadow:0 0 0 3px rgba(90,158,95,.22)}
+      100%{transform:scale(1);box-shadow:none}
+    }
+    .nav-layout-row{border-radius:10px;transition:background .24s ease,box-shadow .24s ease}
+    .nav-layout-row.is-moved{background:rgba(200,150,62,.08);box-shadow:0 0 0 1px rgba(200,150,62,.18)}
+    .nav-layout-sub-list{display:grid;gap:0}
+    .nav-layout-actions{display:flex;gap:4px;flex-shrink:0}
+    .production-history-pill{
+      display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 10px;border-radius:10px;
+      background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);cursor:pointer;font-family:inherit;
+      transition:background .2s ease,border-color .2s ease,transform .2s ease;
+    }
+    .production-history-pill:hover{background:rgba(200,150,62,.1);border-color:rgba(200,150,62,.28);transform:translateY(-1px)}
+    .production-history-pill-value{font-size:18px;font-weight:700;color:${C.text};line-height:1}
+    .production-history-pill-label{font-size:10px;color:${C.dim}}
     .store-history-panel{margin-top:12px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px;position:relative;z-index:1}
     @media(max-width:520px){
       .store-card-actions--blocked{justify-content:stretch}
@@ -1028,6 +1123,9 @@ export default function App(){
   }
   @media (prefers-reduced-motion:reduce){
     .app-bg::after,.skeleton::after,.btn-primary-shine::after{animation:none !important}
+    .attendance-row.is-just-marked::after,.store-card.is-blocking-fx,.store-card.is-unblocking-fx,.marks-worker-panel.is-marked-success{animation:none !important}
+    .attendance-row.is-just-marked-success,.attendance-row.is-just-marked-info,.attendance-row.is-just-marked-danger{animation:none !important;box-shadow:none !important}
+    .production-history-pill:hover{transform:none}
     *,*::before,*::after{
       animation-duration:.001ms !important;
       animation-iteration-count:1 !important;
@@ -1077,98 +1175,11 @@ export default function App(){
   const isCourier=jobProfile==="courier";
   const isLepstitsa=jobProfile==="lepstitsa";
 
-  const buildNavGroups=()=>{
-    if(isPacker){
-      return [
-        { id:"main", label:"Главная", icon:I.home, items:[{id:"dashboard",label:"Главная",ok:true}]},
-        { id:"sales", label:"Фасовка", icon:I.box, items:[{id:"packing",label:"Фасовка",ok:true}]},
-        { id:"system", label:"Система", icon:I.gear, items:[
-          {id:"marks",label:"Посещаемость",ok:true},
-          {id:"notifications",label:"Уведомления",ok:true},
-        ]},
-      ];
-    }
-    if(isCourier){
-      return [
-        { id:"main", label:"Главная", icon:I.home, items:[{id:"dashboard",label:"Главная",ok:true}]},
-        { id:"sales", label:"Доставка", icon:I.truck, items:[{id:"delivery",label:"Доставка",ok:true}]},
-        { id:"system", label:"Система", icon:I.gear, items:[
-          {id:"marks",label:"Посещаемость",ok:true},
-          {id:"notifications",label:"Уведомления",ok:true},
-        ]},
-      ];
-    }
-    if(isLepstitsa){
-      return [
-        { id:"main", label:"Главная", icon:I.home, items:[{id:"dashboard",label:"Главная",ok:true}]},
-        { id:"production", label:"Производство", icon:I.factory, items:[
-          {id:"tasks",label:"Задания",ok:true},
-          {id:"workerHistory",label:"История",ok:true},
-        ]},
-        { id:"system", label:"Система", icon:I.gear, items:[
-          {id:"marks",label:"Посещаемость",ok:true},
-          {id:"notifications",label:"Уведомления",ok:true},
-        ]},
-      ];
-    }
-    if(isWorker){
-      return [
-        { id:"main", label:"Главная", icon:I.home, items:[{id:"dashboard",label:"Главная",ok:true}]},
-        { id:"production", label:"Производство", icon:I.factory, items:[
-          {id:"tasks",label:"Задания",ok:true},
-          {id:"workerHistory",label:"История",ok:true},
-        ]},
-        { id:"system", label:"Система", icon:I.gear, items:[
-          {id:"marks",label:"Посещаемость",ok:true},
-          {id:"notifications",label:"Уведомления",ok:true},
-        ]},
-      ];
-    }
-    return [
-      { id:"main", label:"Главная", icon:I.home, items:[{id:"dashboard",label:"Главная",ok:true}]},
-      { id:"production", label:"Производство", icon:I.factory, items:[
-        {id:"tasks",label:"Задания",ok:true},
-        {id:"products",label:"Товары",ok:true},
-        {id:"prodOutput",label:"Выпуск",ok:true},
-        {id:"planning",label:"Планирование",ok:isManagerLikeRole},
-        {id:"batches",label:"Партии",ok:isManagerLikeRole},
-        {id:"defects",label:"Брак",ok:isManagerLikeRole},
-      ]},
-      { id:"warehouse", label:"Склад", icon:I.warehouse, items:[
-        {id:"raw",label:"Сырьё",ok:isManagerLikeRole},
-        {id:"deliveries",label:"Поставки",ok:isManagerLikeRole},
-        {id:"procurement",label:"Закупки",ok:isManagerLikeRole},
-      ]},
-      { id:"sales", label:"Торговля", icon:I.truck, items:[
-        {id:"clients",label:"Магазины",ok:isManagerLikeRole},
-        {id:"sales",label:"Продажи",ok:isManagerLikeRole},
-        {id:"inventory",label:"Движение",ok:isManagerLikeRole},
-        {id:"ordersBoard",label:"Доска заказов",ok:isManagerLikeRole},
-        {id:"packing",label:"Фасовка",ok:isManagerLikeRole},
-        {id:"delivery",label:"Доставка",ok:isManagerLikeRole},
-        {id:"debts",label:"Долги магазинов",ok:isManagerLikeRole},
-      ]},
-      { id:"staff", label:"Персонал", icon:I.people, items:[
-        {id:"empstats",label:"KPI",ok:isManagerLikeRole},
-        {id:"salary",label:"Расчёт оплаты",ok:isManagerLikeRole},
-        {id:"workerHistory",label:"История",ok:true},
-        {id:"marks",label:"Посещаемость",ok:true},
-        {id:"users",label:"Пользователи",ok:isSuperAdmin},
-      ]},
-      { id:"analytics", label:"Аналитика", icon:I.analytics, items:[
-        {id:"reports",label:"Отчёты",ok:isManagerLikeRole},
-        {id:"profitAnalytics",label:"Прибыль",ok:isManagerLikeRole},
-        {id:"logs",label:"Журнал",ok:isSuperAdmin},
-      ]},
-      { id:"system", label:"Система", icon:I.gear, items:[
-        {id:"notifications",label:"Уведомления",ok:true},
-        {id:"cameras",label:"Камеры",ok:isManagerLikeRole},
-        {id:"trash",label:"Корзина",ok:isSuperAdmin},
-      ]},
-    ];
+  const navCtx={
+    isPacker,isCourier,isLepstitsa,isWorker,isManagerLikeRole,isSuperAdmin,
   };
 
-  const navGroups = buildNavGroups().map(g=>({...g,items:g.items.filter(i=>i.ok)})).filter(g=>g.items.length>0);
+  const navGroups=applyNavLayout(buildBaseNavGroups(navCtx),navLayout);
 
   // Find which group the current page belongs to
   let activeGroupId = "main";
@@ -1295,7 +1306,7 @@ export default function App(){
                   const item=group.items[0];
                   const active=page===item.id;
                   return(
-                    <motion.div key={group.id} variants={listItem}>
+                    <motion.div key={group.id} variants={listItem} layout={!reduceMotion} transition={navLayoutTransition}>
                     <button key={group.id} onClick={()=>{setPage(item.id);setSideOpen(false)}} className={`nav-item${active?" active":""}`}>
                       {active&&<motion.div layoutId="active-nav-pill" className="active-nav-pill" transition={spring.soft}/>}
                       <span className="nav-item-content">
@@ -1309,7 +1320,7 @@ export default function App(){
                 }
 
                 return(
-                  <motion.div key={group.id} style={{marginBottom:4}} variants={listItem}>
+                  <motion.div key={group.id} style={{marginBottom:4}} variants={listItem} layout={!reduceMotion} transition={navLayoutTransition}>
                     <button onClick={()=>toggleGroup(group.id)} className={`nav-group-btn${groupHasActive?" active-group":""}`}>
                       <motion.span whileHover={{ scale: 1.06 }} transition={spring.snappy} style={{ display: "flex" }}><GIco size={16}/></motion.span>
                       <span style={{flex:1}}>{group.label}</span>
@@ -1329,11 +1340,11 @@ export default function App(){
                         const active=page===item.id;
                         const showItemBadge=item.id==="notifications"&&unreadCount>0;
                         return(
-                          <button key={item.id} onClick={()=>{setPage(item.id);setSideOpen(false)}} className={`nav-sub-item${active?" active":""}`}>
+                          <motion.button key={item.id} layout={!reduceMotion} transition={navLayoutTransition} onClick={()=>{setPage(item.id);setSideOpen(false)}} className={`nav-sub-item${active?" active":""}`}>
                             {active&&<motion.div layoutId="active-nav-pill" className="active-nav-pill" transition={spring.soft}/>}
                             <span className="nav-sub-content">{item.label}</span>
                             {showItemBadge&&<span style={{marginLeft:"auto",minWidth:16,height:16,borderRadius:8,background:C.danger,color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{unreadCount>9?"9+":unreadCount}</span>}
-                          </button>
+                          </motion.button>
                         );
                       })}
                     </motion.div>
@@ -1355,9 +1366,18 @@ export default function App(){
                   </div>
                 </div>
               </div>
+              {(isAdmin||isOwner)&&<Btn v="secondary" sz="sm" onClick={()=>setNavSettingsOpen(true)} icon={<I.gear size={13}/>} style={{width:"100%",justifyContent:"center",marginBottom:8}}>Настройка меню</Btn>}
               <Btn v="secondary" sz="sm" onClick={handleLogout} icon={<I.out size={13}/>} style={{width:"100%",justifyContent:"center"}}>Выйти</Btn>
             </div>
           </aside>
+
+          <NavSettingsModal
+            open={navSettingsOpen}
+            onClose={()=>setNavSettingsOpen(false)}
+            navCtx={navCtx}
+            navLayout={navLayout}
+            setNavLayout={setNavLayout}
+          />
 
           <div className="app-workspace">
             <header className="glass-topbar">

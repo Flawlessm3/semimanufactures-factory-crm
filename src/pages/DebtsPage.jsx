@@ -110,7 +110,7 @@ const DebtsPage = ()=>{
               return(
                 <div key={s.storeId} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
                   <div style={{flex:1,fontSize:13,fontWeight:600,color:C.text}}>{st?.name||"—"}</div>
-                  {st?.status==="blacklist"&&<Badge color="danger" s={{fontSize:10}}>ЧС</Badge>}
+                  {st?.status==="blacklist"&&<Badge color="danger" s={{fontSize:10}}><I.ban size={10}/> Блок</Badge>}
                   {st?.lastPaymentDate&&<span style={{fontSize:10,color:C.dim}}>посл. оплата: {fmtShort(st.lastPaymentDate)}</span>}
                   <span style={{fontWeight:700,color:C.danger,fontSize:14,minWidth:80,textAlign:"right"}}>{s.active.toLocaleString("ru")}₽</span>
                   {isAdmin&&<button onClick={()=>{setForm({...emptyForm,storeId:s.storeId});setEdit(null);setErrs({});setModal(true)}} style={{fontSize:11,padding:"3px 9px",borderRadius:5,border:`1px solid ${C.primary}30`,background:`${C.primary}10`,color:C.primary,cursor:"pointer",fontFamily:"inherit"}}>+Долг</button>}

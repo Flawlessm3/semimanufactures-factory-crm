@@ -9,7 +9,6 @@ import { C } from "../theme/colors.js";
 import { I } from "../icons/Icons.jsx";
 import { Badge, Btn, Inp, Sel, Txa, Modal, Confirm, Toast, TH, TD, Card, PageH, IconBox } from "../components/ui/index.jsx";
 import { useAppMotion } from "../motion/MotionProvider.jsx";
-import { t } from "../motion/presets.js";
 
 const actionMotion = {
   initial: { opacity: 0, y: 8, filter: "blur(6px)" },
@@ -31,14 +30,17 @@ const StoreCard = ({
   statusColor,
   statusLabel,
   stIco,
+  fxType,
+  isFxActive,
 }) => {
   const { reduceMotion } = useAppMotion();
   const isBlacklisted = isStoreBlacklisted(c);
   const motionProps = reduceMotion ? {} : actionMotion;
+  const fxClass = isFxActive && fxType === "block" ? " is-blocking-fx" : isFxActive && fxType === "unblock" ? " is-unblocking-fx" : "";
 
   return (
     <Card
-      className={`store-card${isBlacklisted ? " is-blacklisted" : ""}`}
+      className={`store-card${isBlacklisted ? " is-blacklisted" : ""}${fxClass}`}
       layout={!reduceMotion}
       s={{
         cursor: isBlacklisted ? "default" : "pointer",
@@ -55,26 +57,11 @@ const StoreCard = ({
             <h3 className="store-title">
               <span className={isBlacklisted ? "strikeable-text" : ""}>{c.name}</span>
             </h3>
-            <AnimatePresence>
-              {isBlacklisted && (
-                <motion.span
-                  className="store-blacklist-badge"
-                  initial={reduceMotion ? false : { opacity: 0, scale: 0.92, y: -4 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.92, y: -4 }}
-                  transition={t.base}
-                  style={{ marginTop: 6, display: "inline-flex" }}
-                >
-                  <I.ban size={12} />
-                  Чёрный список
-                </motion.span>
-              )}
-              {!isBlacklisted && c.status && c.status !== "active" && (
-                <Badge color={statusColor(c.status)} s={{ fontSize: 10, marginTop: 2 }}>
-                  {statusLabel(c.status)}
-                </Badge>
-              )}
-            </AnimatePresence>
+            {!isBlacklisted && c.status && c.status !== "active" && (
+              <Badge color={statusColor(c.status)} s={{ fontSize: 10, marginTop: 2 }}>
+                {statusLabel(c.status)}
+              </Badge>
+            )}
           </div>
         </div>
         <div className="store-card-badges-top">
@@ -106,10 +93,10 @@ const StoreCard = ({
         </div>
       )}
 
-      {isBlacklisted && c.blockReason && (
+      {isBlacklisted && (
         <div className="store-block-reason">
           <I.alert size={14} />
-          <span>Причина: {c.blockReason}</span>
+          <span>{c.blockReason ? `Причина: ${c.blockReason}` : "Магазин заблокирован"}</span>
         </div>
       )}
 
@@ -133,7 +120,7 @@ const StoreCard = ({
                 onClick={e => { e.stopPropagation(); onBlacklist(c); }}
                 style={{ background: "transparent", border: `1px solid ${C.danger}40` }}
               >
-                В ЧС
+                Заблокировать
               </Btn>
             )}
           </motion.div>
@@ -187,6 +174,7 @@ const ClientsPage = ()=>{
   const [selectedClient,setSelectedClient]=useState(null);
   const [historyOrder,setHistoryOrder]=useState(null);
   const [editStore,setEditStore]=useState(null);
+  const [storeFx,setStoreFx]=useState(null);
   const emptyStore={name:"",phone:"",whatsapp:"",address:"",contact:"",comment:"",status:"active",blockReason:""};
   const [form,setForm]=useState(emptyStore);
   const ap=products.filter(p=>!p.deleted);
@@ -228,7 +216,7 @@ const ClientsPage = ()=>{
   const openNewOrderForClient = (clientId) => {
     const store = clients.find(c => c.id === clientId);
     if (isStoreBlacklisted(store)) {
-      setToast({ message: "Магазин в чёрном списке. Сначала разблокируйте его.", type: "warn" });
+      setToast({ message: "Магазин заблокирован. Сначала разблокируйте его.", type: "warn" });
       return;
     }
     setOrderForm({ clientId, items: [{ productId: ap[0]?.id || "", qty: "" }], note: "", source: "WhatsApp", priority: "нормальный" });
@@ -238,20 +226,24 @@ const ClientsPage = ()=>{
 
   const blacklistStore = (c) => {
     setClients(p => p.map(x => x.id === c.id ? { ...x, status: "blacklist", blockReason: "заблокирован вручную" } : x));
-    addLog(`Чёрный список: ${c.name}`);
+    addLog(`Магазин заблокирован: ${c.name}`);
+    setStoreFx({ id: c.id, type: "block", ts: Date.now() });
+    setTimeout(() => setStoreFx(null), 800);
     if (selectedClient === c.id) setSelectedClient(null);
   };
 
   const unblockStore = (c) => {
     setClients(p => p.map(x => x.id === c.id ? { ...x, status: "active", blockReason: "" } : x));
-    addLog(`Разблок.: ${c.name}`);
+    addLog(`Магазин разблокирован: ${c.name}`);
+    setStoreFx({ id: c.id, type: "unblock", ts: Date.now() });
+    setTimeout(() => setStoreFx(null), 800);
   };
 
   const saveOrder=()=>{
     if(!orderForm.clientId){setErrs({clientId:"!"});return}
     const store=clients.find(c=>c.id===+orderForm.clientId);
     // Block blacklisted stores (unless admin/owner overrides)
-    if(store?.status==="blacklist"&&!isAdmin){setToast({message:`${store.name} в чёрном списке — заказ запрещён`,type:"error"});return}
+    if(store?.status==="blacklist"&&!isAdmin){setToast({message:`Заказ недоступен: ${store.name} заблокирован`,type:"error"});return}
     if(store?.status==="blocked"&&!isAdmin){setToast({message:`${store.name} заблокирован`,type:"error"});return}
     const validItems=orderForm.items.filter(it=>it.productId&&it.qty&&+it.qty>0);
     if(!validItems.length){setToast({message:"Добавьте товары",type:"error"});return}
@@ -344,6 +336,8 @@ const ClientsPage = ()=>{
               statusColor={statusColor}
               statusLabel={statusLabel}
               stIco={stIco}
+              fxType={storeFx?.id === c.id ? storeFx.type : null}
+              isFxActive={storeFx?.id === c.id && Date.now() - storeFx.ts < 800}
             />
           ))}
           {clients.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:50,color:C.dim}}>Нет магазинов. Добавьте первый.</div>}
@@ -414,7 +408,7 @@ const ClientsPage = ()=>{
           <Sel label="Приоритет" value={orderForm.priority||"нормальный"} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})} options={ORDER_PRIORITIES.map(p=>({value:p,label:p}))}/>
           <Sel label="Источник" value={orderForm.source||"WhatsApp"} onChange={e=>setOrderForm({...orderForm,source:e.target.value})} options={ORDER_SOURCES.map(s=>({value:s,label:s}))}/>
         </div>
-        {orderForm.clientId&&(()=>{const st=clients.find(c=>c.id===+orderForm.clientId);return st?.status==="blacklist"?<div style={{padding:"8px 12px",background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:7,fontSize:12,color:C.danger,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин в чёрном списке: {st.blockReason||"причина не указана"}</div>:st?.status==="blocked"?<div style={{padding:"8px 12px",background:`${C.orange}15`,border:`1px solid ${C.orange}30`,borderRadius:7,fontSize:12,color:C.orange,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин заблокирован</div>:null;})()}
+        {orderForm.clientId&&(()=>{const st=clients.find(c=>c.id===+orderForm.clientId);return st?.status==="blacklist"?<div style={{padding:"8px 12px",background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:7,fontSize:12,color:C.danger,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин заблокирован{st.blockReason?`: ${st.blockReason}`:""}</div>:st?.status==="blocked"?<div style={{padding:"8px 12px",background:`${C.orange}15`,border:`1px solid ${C.orange}30`,borderRadius:7,fontSize:12,color:C.orange,marginBottom:8,display:"flex",alignItems:"center",gap:6}}><I.alert size={13}/>Магазин заблокирован</div>:null;})()}
         <div style={{marginBottom:12}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <label style={{fontSize:12,fontWeight:500,color:C.muted}}>Товары</label>

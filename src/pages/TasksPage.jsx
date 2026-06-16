@@ -10,6 +10,7 @@ import { EthnicBorder, EthnicCorner, Badge, Btn, Inp, Sel, Txa, Modal, Confirm, 
 import { TechMapCard } from "../components/ui/TechMapCard.jsx";
 import { listItem, spring } from "../motion/presets.js";
 import { canSeeFinance } from "../utils/roles.js";
+import { apiFetch } from "../api/client.js";
 
 // TASKS
 const TasksPage = ()=>{
@@ -28,6 +29,7 @@ const TasksPage = ()=>{
   const [form,setForm]=useState({productId:ap[0]?.id||"",userIds:[],quantity:"",deadline:"",note:""});
   const [rawCheck,setRawCheck]=useState(null);
   const [empQtys,setEmpQtys]=useState({});
+  const [selfQty,setSelfQty]=useState("");
   const [recipeProductId,setRecipeProductId]=useState(null);
 
   const filtered=useMemo(()=>{
@@ -92,115 +94,118 @@ const TasksPage = ()=>{
   };
 
   const openComplete=(t)=>{
+    if(isWorker){
+      const myTe=taskEmployees.find(te=>te.taskId===t.id&&te.employeeId===currentUser.id);
+      if(myTe&&(+myTe.producedQty||0)>0){
+        setToast({message:"Вы уже сдали свою часть",type:"warn"});
+        return;
+      }
+      setSelfQty("");
+      setCompleteModal(t);
+      return;
+    }
     const initial={};
     (t.userIds||[]).forEach(uid=>{
+      const te=taskEmployees.find(e=>e.taskId===t.id&&e.employeeId===uid);
+      const existing=+(te?.producedQty||0);
+      if(existing>0){
+        initial[uid]=existing;
+        return;
+      }
       const eq=Math.floor(t.quantity/(t.userIds||[]).length);
       initial[uid]=eq;
     });
-    // Adjust remainder to first user
     const remainder=t.quantity-Object.values(initial).reduce((s,v)=>s+v,0);
-    if(remainder>0&&(t.userIds||[]).length>0) initial[(t.userIds||[])[0]]+=remainder;
+    if(remainder>0){
+      const pending=(t.userIds||[]).find(uid=>!(taskEmployees.find(e=>e.taskId===t.id&&e.employeeId===uid)?.producedQty));
+      if(pending) initial[pending]=(initial[pending]||0)+remainder;
+    }
     setEmpQtys(initial);
     setCompleteModal(t);
   };
 
+  const doCompleteSelf=async()=>{
+    const t=completeModal;if(!t)return;
+    const qty=+selfQty;
+    if(!qty||qty<=0){setToast({message:"Укажите количество больше 0",type:"error"});return;}
+    try{
+      const r=await apiFetch("/api/actions/task-complete-self",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({taskId:t.id,quantity:qty}),
+      });
+      if(!r){
+        setToast({message:"Нет связи с сервером",type:"error"});
+        return;
+      }
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok){
+        setToast({message:data.error||`Ошибка сервера (${r.status})`,type:"error"});
+        return;
+      }
+      if(data.state)applyServerState(data.state);
+      setToast({message:"Ваша часть сдана",type:"success"});
+      setCompleteModal(null);
+    }catch{
+      setToast({message:"Не удалось обработать ответ сервера",type:"error"});
+    }
+  };
+
   const doComplete=async()=>{
     const t=completeModal;if(!t)return;
-    // Guard: task already completed (double-click / race condition)
     if(t.status==="завершено"||t.status==="просрочено"){setCompleteModal(null);return;}
-    // Guard: productionOutput already exists for this task
-    if((productionOutputs||[]).some(o=>o.taskId===t.id)){
-      setToast({message:"Выпуск для этого задания уже создан",type:"warn"});
-      setCompleteModal(null);return;
-    }
+
     const totalAssigned=Object.values(empQtys).reduce((s,v)=>s+(+v||0),0);
-    if(totalAssigned!==t.quantity){setToast({message:`Сумма (${totalAssigned}) должна равняться ${t.quantity}`,type:"error"});return}
+    if(totalAssigned!==t.quantity){setToast({message:`Сумма (${totalAssigned}) должна равняться ${t.quantity}`,type:"error"});return;}
 
-    // ── Worker path: server action endpoint ──
-    // Workers cannot write manager-only keys (dk_batches, dk_products, dk_raw_mats, etc.)
-    // so we delegate all derived state updates to the server atomically.
-    const role=ROLES.find(r=>r.id===currentUser.roleId);
-    if(role?.name==="worker"){
-      try{
-        const r=await fetch("/api/actions/task-complete",{
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({taskId:t.id,quantities:empQtys}),
-        });
-        const data=await r.json();
-        if(!r.ok){setToast({message:data.error||"Ошибка сервера",type:"error"});return;}
-        applyServerState(data.state);
-        setToast({message:"Завершено!",type:"success"});
-      }catch(e){
-        setToast({message:"Нет соединения с сервером",type:"error"});
-      }
-      setCompleteModal(null);
-      return;
-    }
-
-    // ── Manager / Admin path (unchanged) ──
+    // ── Manager / Admin path via server ──
     const now=new Date().toISOString();
     const isLate=new Date(now)>new Date(t.deadline);
 
-    // 1. Update task and taskEmployee statuses
-    setTasks(p=>p.map(x=>x.id===t.id?{...x,status:isLate?"просрочено":"завершено",completedAt:now}:x));
-    Object.entries(empQtys).forEach(([uid,qty])=>{
-      setTaskEmployees(p=>p.map(te=>te.taskId===t.id&&te.employeeId===+uid?{...te,producedQty:+qty,status:isLate?"просрочено":"завершено"}:te));
-    });
-
-    // 2. One batch for the entire task (all workers combined = t.quantity).
-    //    batchId is shared across all per-worker outputs so revertOutput knows which batch to remove.
-    const sharedBatchId=t.id+0.5;
-    const expiresAt=new Date(new Date(now).getTime()+7*24*3600*1000).toISOString();
-    setBatches(p=>[...(p||[]),{id:sharedBatchId,productId:t.productId,quantity:t.quantity,producedAt:now,expiresAt,createdBy:currentUser.id,status:"активна",note:t.note||"",taskId:t.id}]);
-
-    // 3. One productionOutput per worker (with their individual qty share).
-    //    applyOutput handles: stock, inventoryMovements, rawMaterials, rawMovements, employeeHistory, productionPlans.
-    //    First worker's output carries batchId so revertOutput can remove the batch;
-    //    subsequent workers carry batchId:null (batch already created above).
-    let runningStock=products.find(p=>p.id===t.productId)?.stock||0;
-    let firstWorker=true;
-    Object.entries(empQtys).forEach(([uid,qty])=>{
-      if(+qty<=0) return;
-      const outId=Date.now()+Math.random();
-      const newOut={id:outId,productId:t.productId,employeeId:+uid,quantity:+qty,date:now,taskId:t.id,source:"task",batchId:firstWorker?sharedBatchId:null,comment:t.note||"",createdAt:now,createdBy:currentUser.id};
-      firstWorker=false;
-      setProductionOutputs(p=>[...(p||[]),newOut]);
-      applyOutput(newOut,runningStock);
-      runningStock+=+qty;
-    });
-
-    // 4. Logging, notifications, low-stock alerts
-    const pName=products.find(p=>p.id===t.productId)?.name;
-    const names=(t.userIds||[]).map(uid=>users.find(u=>u.id===uid)?.name?.split(" ").slice(0,2).join(" ")).join(", ");
-    addLog(`Завершено: ${pName} x${t.quantity}${isLate?" (просрочено)":""} \u2192 ${names}`);
-    addNotification({title:`Задание ${isLate?"просрочено":"выполнено"}: ${pName}`,type:isLate?"ошибка":"информация",content:`${names} ${isLate?"просрочили":"завершили"}: ${pName} x${t.quantity}`,targetAll:true});
-    const recipe=recipes.find(r=>r.productId===t.productId);
-    rawMaterials.forEach(r=>{
-      const est=r.stock-(recipe?.items.find(x=>x.rawId===r.id)?.qty||0)*t.quantity;
-      if(est<=r.minStock){addNotification({title:`Низкий остаток: ${r.name}`,type:"предупреждение",content:`${r.name}: ~${est.toFixed(1)} ${r.unit} (мин. ${r.minStock} ${r.unit})`,targetAll:true});}
-    });
-    setToast({message:isLate?"Завершено с опозданием":"Завершено!",type:isLate?"warn":"success"});
-    setCompleteModal(null);
+    try{
+      const r=await apiFetch("/api/actions/task-complete",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({taskId:t.id,quantities:empQtys}),
+      });
+      if(!r){
+        setToast({message:"Нет связи с сервером",type:"error"});
+        return;
+      }
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok){
+        setToast({message:data.error||`Ошибка сервера (${r.status})`,type:"error"});
+        return;
+      }
+      if(data.state)applyServerState(data.state);
+      setToast({message:isLate?"Завершено с опозданием":"Завершено!",type:isLate?"warn":"success"});
+      setCompleteModal(null);
+    }catch{
+      setToast({message:"Не удалось обработать ответ сервера",type:"error"});
+    }
   };
 
   const startTask=async(t)=>{
     try{
-      const r=await fetch("/api/actions/task-start",{
+      const r=await apiFetch("/api/actions/task-start",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({taskId:t.id}),
       });
+      if(!r){
+        setToast({message:"Нет связи с сервером",type:"error"});
+        return;
+      }
       if(!r.ok){
         const err=await r.json().catch(()=>({}));
         setToast({message:err.error||"Не удалось начать задание",type:"error"});
         return;
       }
-      const data=await r.json();
+      const data=await r.json().catch(()=>({}));
       if(data.state)applyServerState(data.state);
       setToast({message:"Задание начато",type:"info"});
-    }catch(e){
-      setToast({message:"Нет связи с сервером",type:"error"});
+    }catch{
+      setToast({message:"Не удалось обработать ответ сервера",type:"error"});
     }
   };
 
@@ -230,6 +235,11 @@ const TasksPage = ()=>{
           const hiddenWorkersCount=Math.max(0,tWorkers.filter(Boolean).length-visibleWorkers.length);
           const isOverdue=!t.completedAt&&new Date()>new Date(t.deadline)&&t.status!=="завершено"&&t.status!=="просрочено";
           const canAct=isWorker?(t.userIds||[]).includes(currentUser.id):true;
+          const myTe=isWorker?tEmps.find(te=>te.employeeId===currentUser.id):null;
+          const myQty=+(myTe?.producedQty||0);
+          const myPartDone=myQty>0;
+          const myPartStatus=myPartDone?"сдано":t.status==="в работе"?"в работе":"не начато";
+          const myPartColor=myPartDone?"success":myPartStatus==="в работе"?"info":"primary";
           const msLeft=new Date(t.deadline).getTime()-Date.now();
           const hoursLeft=Math.floor(Math.abs(msLeft)/3600000);
           const dlLabel=t.completedAt?`Завершено: ${fmtShort(t.completedAt)}`:isOverdue?`Просрочено на ${hoursLeft} ч`:msLeft<3600000?`Срок: < 1 ч`:msLeft<86400000?`Срок: ${hoursLeft} ч`:msLeft<172800000?`Срок: завтра`:fmtShort(t.deadline);
@@ -256,7 +266,16 @@ const TasksPage = ()=>{
                   <ProgressBar value={progressPct} color={progressPct>=100?C.success:C.primary}/>
                 </div>
               </div>
-              {/* Employees list */}
+              {isWorker&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",fontSize:12}}>
+                  <span style={{color:C.dim}}>Моя часть:</span>
+                  <Badge color={myPartColor}>{myPartStatus}</Badge>
+                  {myPartDone&&<span style={{color:C.success,fontWeight:600}}>Сдано {myQty} {prod?.unit||""}</span>}
+                  {!myPartDone&&t.status!=="назначено"&&<span style={{color:C.muted}}>План: {t.quantity} {prod?.unit||""}</span>}
+                </div>
+              )}
+              {/* Employees list — managers see all; workers see summary only above */}
+              {!isWorker&&(
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 <span style={{fontSize:11,color:C.dim,lineHeight:"24px"}}>Исполнители:</span>
                 {visibleWorkers.map((w,i)=>{
@@ -267,9 +286,11 @@ const TasksPage = ()=>{
                 })}
                 {hiddenWorkersCount>0&&<Badge color="info" s={{fontSize:11}}>+ ещё {hiddenWorkersCount}</Badge>}
               </div>
+              )}
               <div style={{display:"flex",gap:5,justifyContent:"flex-end",marginTop:2}}>
                 {t.status==="назначено"&&canAct&&<Btn sz="sm" v="info" onClick={()=>startTask(t)} style={{background:C.infoBg,color:C.info,border:`1px solid ${C.info}30`}}>Начать</Btn>}
-                {t.status==="в работе"&&canAct&&<Btn sz="sm" v="success" onClick={()=>openComplete(t)}>Завершить</Btn>}
+                {t.status==="в работе"&&canAct&&!myPartDone&&<Btn sz="sm" v="success" onClick={()=>openComplete(t)}>{isWorker?"Сдать мою часть":"Завершить"}</Btn>}
+                {t.status==="в работе"&&canAct&&myPartDone&&<Badge color="success">Часть сдана</Badge>}
               </div>
               {prod?.techCard&&prod.techCard.length>0&&(
                 <div style={{marginTop:8}}>
@@ -336,11 +357,27 @@ const TasksPage = ()=>{
         </div>
       </Modal>
 
-      {/* Complete task modal — distribute quantities */}
-      <Modal open={!!completeModal} onClose={()=>setCompleteModal(null)} title="Завершение задания" width={480}>
+      {/* Complete task modal */}
+      <Modal open={!!completeModal} onClose={()=>setCompleteModal(null)} title={isWorker?"Сдать мою часть":"Завершение задания"} width={480}>
         {completeModal&&(()=>{
           const t=completeModal;
           const prod=products.find(p=>p.id===t.productId);
+          if(isWorker){
+            return(
+              <div>
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>{prod?.name}</div>
+                  <div style={{fontSize:12,color:C.muted,marginTop:4}}>План задания: {t.quantity} {prod?.unit}. Укажите, сколько вы сделали.</div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:6}}>Уже сдано всего: {taskEmployees.filter(te=>te.taskId===t.id).reduce((s,te)=>s+(+te.producedQty||0),0)} / {t.quantity}</div>
+                </div>
+                <Inp label="Сколько вы сделали" type="number" min="1" value={selfQty} onChange={e=>setSelfQty(e.target.value)}/>
+                <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+                  <Btn v="secondary" onClick={()=>setCompleteModal(null)}>Отмена</Btn>
+                  <Btn v="success" onClick={doCompleteSelf} disabled={!selfQty||+selfQty<=0}>Сдать мою часть</Btn>
+                </div>
+              </div>
+            );
+          }
           const total=Object.values(empQtys).reduce((s,v)=>s+(+v||0),0);
           const isValid=total===t.quantity;
           return(<div>
@@ -350,11 +387,19 @@ const TasksPage = ()=>{
             </div>
             {(t.userIds||[]).map(uid=>{
               const w=users.find(u=>u.id===uid);
+              const te=taskEmployees.find(e=>e.taskId===t.id&&e.employeeId===uid);
+              const already=+(te?.producedQty||0);
+              const locked=already>0;
               return(
                 <div key={uid} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:10,background:C.bg,borderRadius:8,border:`1px solid ${C.border}`}}>
                   <div style={{flex:1,fontSize:13,fontWeight:500,color:C.text}}>{w?.name?.split(" ").slice(0,2).join(" ")}</div>
-                  <input type="number" min="0" value={empQtys[uid]||""} onChange={e=>setEmpQtys({...empQtys,[uid]:+e.target.value||0})} style={{width:80,padding:"6px 8px",background:C.surface2,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,fontFamily:"inherit",textAlign:"right"}}/>
-                  <span style={{fontSize:12,color:C.dim,width:30}}>{prod?.unit}</span>
+                  {locked
+                    ? <span style={{fontSize:13,fontWeight:700,color:C.success}}>{already} {prod?.unit} (сдано)</span>
+                    : <>
+                        <input type="number" min="0" value={empQtys[uid]||""} onChange={e=>setEmpQtys({...empQtys,[uid]:+e.target.value||0})} style={{width:80,padding:"6px 8px",background:C.surface2,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,fontFamily:"inherit",textAlign:"right"}}/>
+                        <span style={{fontSize:12,color:C.dim,width:30}}>{prod?.unit}</span>
+                      </>
+                  }
                 </div>
               );
             })}

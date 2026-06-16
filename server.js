@@ -102,11 +102,12 @@ const KEY_ACCESS = {
   dk_inv_move:        { read: "manager",write: "manager" },
   dk_debts:           { read: "manager",write: "manager" },
   dk_payroll:         { read: "manager",write: "manager" },
-  dk_base_salaries:   { read: "admin",  write: "admin"   },
+  dk_base_salaries:   { read: "manager", write: "manager" },
   dk_users:           { read: "all",    write: "admin"   },
   dk_logs:            { read: "admin",  write: "admin"   },
   dk_bonus_rules:     { read: "manager",write: "admin"   },
   dk_cameras:         { read: "manager",write: "manager" },
+  dk_nav_layout:      { read: "all",    write: "admin"   },
 };
 
 // Role hierarchy: which level satisfies which requirement
@@ -125,6 +126,24 @@ function satisfies(userRoleId, required) {
   if (required === "manager") return level === "manager" || level === "admin";
   if (required === "admin") return level === "admin";
   return false;
+}
+
+function requireManagerLike(req, res, next) {
+  const lvl = roleLevel(req.user.roleId);
+  if (lvl === "admin" || lvl === "manager") return next();
+  return res.status(403).json({ error: "Недостаточно прав" });
+}
+
+function toHHMM(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function sanitizeUsers(users = []) {
+  return users.map(u => {
+    const { password: _p, ...rest } = u;
+    return rest;
+  });
 }
 
 // ── App ──
@@ -439,6 +458,10 @@ function serverApplyOutput(state, out) {
   return state;
 }
 
+const idEq = (a, b) => Number(a) === Number(b);
+const taskHasUser = (task, userId) => (task.userIds || []).some(uid => idEq(uid, userId));
+const findTaskById = (tasks, taskId) => tasks.find(t => idEq(t.id, taskId));
+
 // ── ACTION ENDPOINTS ──
 // These allow workers to trigger complex multi-key updates atomically on the server,
 // bypassing the per-key write restrictions that exist in /api/state/:key.
@@ -447,9 +470,10 @@ function serverApplyOutput(state, out) {
 // Any authenticated user assigned to the task can complete it.
 // Workers: must be in task.userIds. Manager/admin: any task.
 app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
-  const { taskId, quantities } = req.body;
+  const { taskId, quantities } = req.body || {};
+  const tid = Number(taskId);
   // quantities: { [userId: string]: number }
-  if (!taskId || !quantities || typeof quantities !== "object") {
+  if (!Number.isFinite(tid) || !quantities || typeof quantities !== "object") {
     return res.status(400).json({ error: "Укажите taskId и quantities" });
   }
 
@@ -461,18 +485,21 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
       const batches = await readState("dk_batches", client) || [];
 
       // Validate task
-      const task = tasks.find(t => t.id === taskId);
+      const task = findTaskById(tasks, tid);
       if (!task) throw { status: 404, message: "Задание не найдено" };
       if (task.status === "завершено" || task.status === "просрочено") {
         throw { status: 409, message: "Задание уже завершено" };
       }
-      if (prodOutputs.some(o => o.taskId === taskId)) {
+      const existingOutputs = prodOutputs.filter(o => idEq(o.taskId, tid));
+      const existingTotal = existingOutputs.reduce((s, o) => s + (+o.quantity || 0), 0);
+      if (existingTotal >= task.quantity - 0.001) {
         throw { status: 409, message: "Выпуск для этого задания уже создан" };
       }
 
       // Worker authorization: must be assigned to this task
       const isWorkerRole = roleLevel(req.user.roleId) === "worker";
-      if (isWorkerRole && !(task.userIds || []).includes(req.user.userId)) {
+      const uid = Number(req.user.userId);
+      if (isWorkerRole && !taskHasUser(task, uid)) {
         throw { status: 403, message: "Вы не назначены на это задание" };
       }
 
@@ -481,11 +508,12 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
         .map(([uid, qty]) => [+uid, +qty])
         .filter(([, qty]) => qty > 0);
       const totalQty = qEntries.reduce((s, [, q]) => s + q, 0);
-      if (Math.abs(totalQty - task.quantity) > 0.001) {
-        throw { status: 400, message: `Сумма ${totalQty} должна равняться ${task.quantity}` };
+      const remainingQty = task.quantity - existingTotal;
+      if (Math.abs(totalQty - remainingQty) > 0.001 && Math.abs(totalQty - task.quantity) > 0.001) {
+        throw { status: 400, message: `Сумма ${totalQty} должна равняться ${remainingQty > 0 ? remainingQty : task.quantity}` };
       }
       for (const [uid] of qEntries) {
-        if (!(task.userIds || []).includes(uid)) {
+        if (!taskHasUser(task, uid)) {
           throw { status: 400, message: `Пользователь ${uid} не назначен на задание` };
         }
       }
@@ -496,22 +524,23 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
 
       // Update task and taskEmployee statuses
       const updatedTasks = tasks.map(t =>
-        t.id === taskId ? { ...t, status: newStatus, completedAt: now } : t
+        idEq(t.id, tid) ? { ...t, status: newStatus, completedAt: now } : t
       );
       const updatedTaskEmps = taskEmps.map(te => {
-        if (te.taskId !== taskId) return te;
+        if (!idEq(te.taskId, tid)) return te;
         const qty = quantities[String(te.employeeId)];
         return { ...te, producedQty: qty != null ? +qty : te.producedQty, status: newStatus };
       });
 
-      // Create one batch for the whole task
-      const sharedBatchId = taskId + 0.5;
+      // Create one batch for the whole task (skip if partial outputs already created one)
+      const hasBatch = batches.some(b => idEq(b.taskId, tid));
+      const sharedBatchId = tid + 0.5;
       const expiresAt = new Date(new Date(now).getTime() + 7 * 24 * 3600 * 1000).toISOString();
-      const newBatch = {
+      const newBatch = !hasBatch ? {
         id: sharedBatchId, productId: task.productId, quantity: task.quantity,
-        producedAt: now, expiresAt, createdBy: req.user.userId,
-        status: "активна", note: task.note || "", taskId,
-      };
+        producedAt: now, expiresAt, createdBy: uid,
+        status: "активна", note: task.note || "", taskId: tid,
+      } : null;
 
       // Create one productionOutput per worker + apply derived state
       const newOutputs = [];
@@ -530,9 +559,9 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
         const outId = Date.now() + Math.random();
         const out = {
           id: outId, productId: task.productId, employeeId: uid, quantity: qty,
-          date: now, taskId, source: "task",
-          batchId: firstWorker ? sharedBatchId : null,
-          comment: task.note || "", createdAt: now, createdBy: req.user.userId,
+          date: now, taskId: tid, source: "task",
+          batchId: firstWorker && !hasBatch ? sharedBatchId : null,
+          comment: task.note || "", createdAt: now, createdBy: uid,
         };
         newOutputs.push(out);
         state = serverApplyOutput(state, out);
@@ -565,7 +594,7 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
       };
 
       const finalOutputs = [...prodOutputs, ...newOutputs];
-      const finalBatches = [...batches, newBatch];
+      const finalBatches = newBatch ? [...batches, newBatch] : batches;
       const finalNotifs = [...notifications, newNotif];
       const finalLogs = [...logs, newLog];
 
@@ -573,7 +602,7 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
       await writeState("dk_tasks",         updatedTasks,          client);
       await writeState("dk_task_emps",     updatedTaskEmps,       client);
       await writeState("dk_prod_outputs",  finalOutputs,          client);
-      await writeState("dk_batches",       finalBatches,          client);
+      if (newBatch) await writeState("dk_batches", finalBatches, client);
       await writeState("dk_products",      state.dk_products,     client);
       await writeState("dk_inv_move",      state.dk_inv_move,     client);
       await writeState("dk_raw_mats",      state.dk_raw_mats,     client);
@@ -592,6 +621,8 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
         dk_raw_mats:      state.dk_raw_mats,
         dk_emp_hist:      state.dk_emp_hist,
         dk_prod_plans:    state.dk_prod_plans,
+        dk_inv_move:      state.dk_inv_move,
+        dk_raw_movements: state.dk_raw_movements,
         dk_notifications: finalNotifs,
         dk_logs:          finalLogs,
       };
@@ -601,6 +632,159 @@ app.post("/api/actions/task-complete", requireAuth, async (req, res) => {
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
     console.error("[task-complete]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/actions/task-complete-self
+// Worker submits only their own partial quantity for a shared task.
+app.post("/api/actions/task-complete-self", requireAuth, async (req, res) => {
+  const { taskId, quantity } = req.body || {};
+  const tid = Number(taskId);
+  const qty = +quantity;
+  const uid = Number(req.user.userId);
+  if (!Number.isFinite(tid) || !qty || qty <= 0) {
+    return res.status(400).json({ error: "Укажите taskId и quantity > 0" });
+  }
+
+  try {
+    const result = await withTransaction(async (client) => {
+      const tasks = await readState("dk_tasks", client) || [];
+      const taskEmps = await readState("dk_task_emps", client) || [];
+      const prodOutputs = await readState("dk_prod_outputs", client) || [];
+      const batches = await readState("dk_batches", client) || [];
+
+      const task = findTaskById(tasks, tid);
+      if (!task) throw { status: 404, message: "Задание не найдено" };
+      if (task.status === "назначено") throw { status: 409, message: "Сначала начните задание" };
+      if (!taskHasUser(task, uid)) {
+        throw { status: 403, message: "Вы не назначены на это задание" };
+      }
+
+      const myEmp = taskEmps.find(te => idEq(te.taskId, tid) && idEq(te.employeeId, uid));
+      if (!myEmp) throw { status: 404, message: "Запись исполнителя не найдена" };
+      if (myEmp.status === "завершено" || myEmp.status === "просрочено" || (+myEmp.producedQty || 0) > 0) {
+        throw { status: 409, message: "Вы уже сдали свою часть" };
+      }
+
+      const existingTotal = prodOutputs
+        .filter(o => idEq(o.taskId, tid))
+        .reduce((s, o) => s + (+o.quantity || 0), 0);
+      if (existingTotal + qty > task.quantity + 0.001) {
+        throw { status: 400, message: `Превышает план задания (${task.quantity})` };
+      }
+
+      const now = new Date().toISOString();
+      const isLate = new Date(now) > new Date(task.deadline);
+      const empStatus = isLate ? "просрочено" : "завершено";
+
+      let state = {
+        dk_products:       await readState("dk_products", client)       || [],
+        dk_inv_move:       await readState("dk_inv_move", client)       || [],
+        dk_raw_mats:       await readState("dk_raw_mats", client)       || [],
+        dk_raw_movements:  await readState("dk_raw_movements", client)  || [],
+        dk_emp_hist:       await readState("dk_emp_hist", client)       || [],
+        dk_prod_plans:     await readState("dk_prod_plans", client)     || [],
+        dk_recipes:        await readState("dk_recipes", client)        || [],
+      };
+
+      const outId = Date.now() + Math.random();
+      const hasBatch = batches.some(b => idEq(b.taskId, tid));
+      const batchId = hasBatch ? null : tid + 0.5;
+      const out = {
+        id: outId, productId: task.productId, employeeId: uid, quantity: qty,
+        date: now, taskId: tid, source: "task",
+        batchId, comment: task.note || "", createdAt: now, createdBy: uid,
+      };
+      state = serverApplyOutput(state, out);
+
+      const newBatch = !hasBatch ? [{
+        id: tid + 0.5, productId: task.productId, quantity: task.quantity,
+        producedAt: now, expiresAt: new Date(new Date(now).getTime() + 7 * 24 * 3600 * 1000).toISOString(),
+        createdBy: uid, status: "активна", note: task.note || "", taskId: tid,
+      }] : [];
+
+      const updatedTaskEmps = taskEmps.map(te =>
+        idEq(te.taskId, tid) && idEq(te.employeeId, uid)
+          ? { ...te, producedQty: qty, status: empStatus, completedAt: now }
+          : te,
+      );
+
+      const allDone = (task.userIds || []).every(wid => {
+        const te = updatedTaskEmps.find(x => idEq(x.taskId, tid) && idEq(x.employeeId, wid));
+        return te && (+te.producedQty || 0) > 0;
+      });
+      const newTotal = existingTotal + qty;
+      const taskDone = allDone && newTotal >= task.quantity - 0.001;
+      const taskStatus = taskDone ? (isLate ? "просрочено" : "завершено") : "в работе";
+
+      const updatedTasks = tasks.map(t =>
+        idEq(t.id, tid)
+          ? { ...t, status: taskStatus, completedAt: taskDone ? now : t.completedAt }
+          : t,
+      );
+
+      const users = await readState("dk_users", client) || [];
+      const product = state.dk_products.find(p => idEq(p.id, task.productId)) || {};
+      const actor = users.find(u => idEq(u.id, uid));
+      const actorName = actor?.name?.split(" ").slice(0, 2).join(" ") || "Работник";
+
+      const notifications = await readState("dk_notifications", client) || [];
+      const logs = await readState("dk_logs", client) || [];
+      const newNotif = {
+        id: Date.now() + Math.random(),
+        title: taskDone
+          ? `Задание ${isLate ? "просрочено" : "выполнено"}: ${product.name || ""}`
+          : `Сдана часть: ${product.name || ""}`,
+        type: isLate ? "ошибка" : "информация",
+        content: `${actorName} сдал(а) ${qty} ${product.unit || "ед."}${taskDone ? "" : " — задание ещё в работе"}`,
+        createdBy: req.user.userId, createdAt: now,
+        readBy: [req.user.userId], targetAll: true, targetUsers: [],
+      };
+      const newLog = {
+        id: Date.now(), userId: req.user.userId, userName: actorName,
+        message: `Сдано: ${product.name || ""} x${qty}${taskDone ? (isLate ? " (просрочено)" : "") : " (часть)"}`,
+        date: now,
+      };
+
+      const finalOutputs = [...prodOutputs, out];
+      const finalBatches = newBatch.length ? [...batches, ...newBatch] : batches;
+      const finalNotifs = [...notifications, newNotif];
+      const finalLogs = [...logs, newLog];
+
+      await writeState("dk_tasks",         updatedTasks,          client);
+      await writeState("dk_task_emps",     updatedTaskEmps,       client);
+      await writeState("dk_prod_outputs",  finalOutputs,          client);
+      if (newBatch.length) await writeState("dk_batches", finalBatches, client);
+      await writeState("dk_products",      state.dk_products,     client);
+      await writeState("dk_inv_move",      state.dk_inv_move,     client);
+      await writeState("dk_raw_mats",      state.dk_raw_mats,     client);
+      await writeState("dk_raw_movements", state.dk_raw_movements,client);
+      await writeState("dk_emp_hist",      state.dk_emp_hist,     client);
+      await writeState("dk_prod_plans",    state.dk_prod_plans,   client);
+      await writeState("dk_notifications", finalNotifs,           client);
+      await writeState("dk_logs",          finalLogs,             client);
+
+      return {
+        dk_tasks: updatedTasks,
+        dk_task_emps: updatedTaskEmps,
+        dk_prod_outputs: finalOutputs,
+        dk_batches: finalBatches,
+        dk_products: state.dk_products,
+        dk_raw_mats: state.dk_raw_mats,
+        dk_emp_hist: state.dk_emp_hist,
+        dk_prod_plans: state.dk_prod_plans,
+        dk_inv_move: state.dk_inv_move,
+        dk_raw_movements: state.dk_raw_movements,
+        dk_notifications: finalNotifs,
+        dk_logs: finalLogs,
+      };
+    });
+
+    res.json({ ok: true, state: result });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error("[task-complete-self]", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -802,30 +986,32 @@ app.post("/api/actions/log", requireAuth, async (req, res) => {
 // Updates task.status → "в работе" and sets startedAt.
 app.post("/api/actions/task-start", requireAuth, async (req, res) => {
   const { taskId } = req.body || {};
-  if (taskId == null) return res.status(400).json({ error: "Укажите taskId" });
+  const tid = Number(taskId);
+  const uid = Number(req.user.userId);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: "Укажите taskId" });
   try {
     const result = await withTransaction(async (client) => {
       const tasks = await readState("dk_tasks", client) || [];
       const taskEmps = await readState("dk_task_emps", client) || [];
-      const task = tasks.find(t => t.id === taskId);
+      const task = findTaskById(tasks, tid);
       if (!task) throw { status: 404, message: "Задание не найдено" };
       if (task.status === "завершено" || task.status === "просрочено") {
         throw { status: 409, message: "Задание уже закрыто" };
       }
 
       const isWorkerRole = roleLevel(req.user.roleId) === "worker";
-      if (isWorkerRole && !(task.userIds || []).includes(req.user.userId)) {
+      if (isWorkerRole && !taskHasUser(task, uid)) {
         throw { status: 403, message: "Вы не назначены на это задание" };
       }
 
       const now = new Date().toISOString();
       const updatedTasks = tasks.map(t =>
-        t.id === taskId
+        idEq(t.id, tid)
           ? { ...t, status: "в работе", startedAt: t.startedAt || now }
           : t
       );
       const updatedTaskEmps = taskEmps.map(te =>
-        te.taskId === taskId && te.status !== "завершено"
+        idEq(te.taskId, tid) && te.status !== "завершено"
           ? { ...te, status: "в работе", startedAt: te.startedAt || now }
           : te
       );
@@ -898,6 +1084,52 @@ app.post("/api/actions/attendance-mark", requireAuth, async (req, res) => {
 
       const users = await readState("dk_users", client) || [];
       const logs = await readState("dk_logs", client) || [];
+      const empHist = await readState("dk_emp_hist", client) || [];
+      const day = when.slice(0, 10);
+      const existingIdx = empHist.findIndex(h => h.employeeId === eid && h.date === day);
+      const existing = existingIdx >= 0 ? empHist[existingIdx] : null;
+      const base = existing || {
+        id: Date.now() + Math.random(),
+        employeeId: eid,
+        date: day,
+        attendance: "present",
+        tasksCompleted: 0,
+        producedQty: 0,
+        comment: "",
+        workStart: "",
+        workEnd: "",
+      };
+
+      let histEntry = { ...base };
+      if (type === "приход") {
+        histEntry = { ...base, attendance: "present", workStart: toHHMM(when) };
+      } else if (type === "опоздание") {
+        histEntry = {
+          ...base,
+          attendance: "late",
+          workStart: toHHMM(when),
+          comment: comment || reason || base.comment || "",
+        };
+      } else if (type === "отсутствие") {
+        histEntry = {
+          ...base,
+          attendance: "absent",
+          comment: comment || reason || base.comment || "",
+        };
+      } else if (type === "уход") {
+        histEntry = {
+          ...base,
+          workEnd: toHHMM(when),
+          attendance: (base.attendance === "present" || base.attendance === "late")
+            ? base.attendance
+            : (base.attendance || "present"),
+        };
+      }
+
+      const updatedHist = existingIdx >= 0
+        ? empHist.map((h, i) => (i === existingIdx ? histEntry : h))
+        : [...empHist, histEntry];
+
       const actor = users.find(u => u.id === req.user.userId);
       const actorName = actor?.name?.split(" ").slice(0, 2).join(" ") || "Работник";
       const target = users.find(u => u.id === eid);
@@ -910,15 +1142,89 @@ app.post("/api/actions/attendance-mark", requireAuth, async (req, res) => {
         date: now,
       };
 
-      await writeState("dk_marks", updated,           client);
-      await writeState("dk_logs",  [...logs, newLog], client);
+      await writeState("dk_marks", updated, client);
+      await writeState("dk_emp_hist", updatedHist, client);
+      await writeState("dk_logs", [...logs, newLog], client);
 
-      return { dk_marks: updated, dk_logs: [...logs, newLog] };
+      return { dk_marks: updated, dk_emp_hist: updatedHist, dk_logs: [...logs, newLog] };
     });
     res.json({ ok: true, state: result });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message });
     console.error("[attendance-mark]", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/actions/payroll-settings
+// Manager/admin/owner updates employee pay settings without generic dk_users write.
+const PAY_TYPES_ALLOWED = ["сдельная", "фиксированная", "смешанная"];
+app.post("/api/actions/payroll-settings", requireAuth, requireManagerLike, async (req, res) => {
+  const { employeeId, payType, baseSalary, pieceRate, fixedDayRate } = req.body || {};
+  const eid = +employeeId;
+  if (!eid) return res.status(400).json({ error: "Укажите employeeId" });
+  if (!PAY_TYPES_ALLOWED.includes(payType)) {
+    return res.status(400).json({ error: "Недопустимый тип оплаты" });
+  }
+
+  const base = +baseSalary || 0;
+  const piece = +pieceRate || 0;
+  const fixedDay = +fixedDayRate || 0;
+  if (base < 0 || piece < 0 || fixedDay < 0) {
+    return res.status(400).json({ error: "Суммы не могут быть отрицательными" });
+  }
+
+  try {
+    const result = await withTransaction(async (client) => {
+      const users = await readState("dk_users", client) || [];
+      const idx = users.findIndex(u => u.id === eid);
+      if (idx < 0) throw { status: 404, message: "Сотрудник не найден" };
+
+      const now = new Date().toISOString();
+      const target = users[idx];
+      const updatedUsers = users.map(u =>
+        u.id === eid
+          ? {
+              ...u,
+              payType,
+              pieceRate: piece,
+              fixedDayRate: fixedDay,
+              updatedAt: now,
+            }
+          : u,
+      );
+
+      const baseSalaries = await readState("dk_base_salaries", client) || {};
+      const nextSalaries = { ...baseSalaries };
+      if (base > 0) nextSalaries[eid] = base;
+      else delete nextSalaries[eid];
+
+      const logs = await readState("dk_logs", client) || [];
+      const actor = users.find(u => u.id === req.user.userId);
+      const actorName = actor?.name?.split(" ").slice(0, 2).join(" ") || "Менеджер";
+      const newLog = {
+        id: Date.now() + Math.random(),
+        userId: req.user.userId,
+        userName: actorName,
+        message: `Настройки оплаты: ${target.name?.split(" ")[0] || eid} → ${payType}`,
+        date: now,
+      };
+
+      await writeState("dk_users", updatedUsers, client);
+      await writeState("dk_base_salaries", nextSalaries, client);
+      await writeState("dk_logs", [...logs, newLog], client);
+
+      return {
+        dk_users: sanitizeUsers(updatedUsers),
+        dk_base_salaries: nextSalaries,
+        dk_logs: [...logs, newLog],
+      };
+    });
+
+    res.json({ ok: true, state: result });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error("[payroll-settings]", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1365,7 +1671,7 @@ app.post("/api/actions/delivery/delivered", requireAuth, async (req, res) => {
 // instead of /api/state/:key?board=1 so we can whitelist fields and keep
 // costPrice/sellPrice/techCard/history/address snapshots on the server.
 
-function toBoardOrderDTO(o) {
+function toBoardOrderDTO(o, clientName = "") {
   return {
     id: o.id,
     status: o.status,
@@ -1373,6 +1679,9 @@ function toBoardOrderDTO(o) {
     orderDate: o.orderDate,
     statusChangedAt: o.statusChangedAt,
     clientId: o.clientId,
+    clientName: clientName || o.clientName || o.storeName || "",
+    packingStatus: o.packingStatus || "не начата",
+    deliveryStatus: o.deliveryStatus || "ожидает",
     items: Array.isArray(o.items)
       ? o.items.map(it => ({ productId: it.productId, qty: it.qty }))
       : [],
@@ -1393,9 +1702,11 @@ function toBoardProductDTO(p) {
 app.get("/api/board/orders", async (_req, res) => {
   try {
     const orders = await readState("dk_client_orders") || [];
+    const clients = await readState("dk_clients") || [];
+    const clientMap = Object.fromEntries(clients.map(c => [c.id, c.name]));
     const active = orders
       .filter(o => !["отгружен", "отменён"].includes(o.status))
-      .map(toBoardOrderDTO);
+      .map(o => toBoardOrderDTO(o, clientMap[o.clientId] || ""));
     res.json(active);
   } catch (e) {
     res.status(500).json([]);
