@@ -5,6 +5,9 @@ import { ROLES } from "./constants/index.js";
 import { INIT_USERS, INIT_PRODUCTS, INIT_RAW_MATERIALS, INIT_RECIPES, INIT_TASKS, INIT_TASK_EMPLOYEES, INIT_EMPLOYEE_HISTORY, INIT_PRODUCTION_PLANS, INIT_CLIENTS, INIT_CLIENT_ORDERS, INIT_SALES, INIT_INVENTORY_MOVEMENTS, INIT_SUPPLIERS, INIT_DELIVERIES, INIT_RAW_MOVEMENTS, INIT_NOTIFICATIONS, INIT_MARKS, INIT_PRODUCTION_OUTPUTS, INIT_DEBTS, INIT_BATCHES, INIT_DEFECTS, INIT_CAMERAS, INIT_BONUS_RULES, INIT_BASE_SALARIES } from "./data/initState.js";
 import { C } from "./theme/colors.js";
 import { I } from "./icons/Icons.jsx";
+import { getJobProfile, roleChipLabel, pageTitle } from "./utils/roles.js";
+import { APP_BRAND, APP_TAGLINE } from "./constants/brand.js";
+import { loadHiddenWarnings, hideWarning, restoreWarning } from "./utils/hiddenWarnings.js";
 import { usePersisted } from "./hooks/usePersisted.js";
 import { setUnauthorizedHandler, setWriteErrorHandler } from "./api/client.js";
 import { apiFetch } from "./api/client.js";
@@ -17,6 +20,7 @@ import { pageTransition, spring, stagger, listItem } from "./motion/presets.js";
 import { LoginPage } from "./pages/LoginPage.jsx";
 import { NotificationBell } from "./components/layout/NotificationBell.jsx";
 import { NavSearch } from "./components/layout/NavSearch.jsx";
+import { NavSettingsModal } from "./components/layout/NavSettingsModal.jsx";
 import { DashboardPage } from "./pages/DashboardPage.jsx";
 import { UsersPage } from "./pages/UsersPage.jsx";
 import { ProductsPage } from "./pages/ProductsPage.jsx";
@@ -43,6 +47,8 @@ import { OrdersBoardStandalone, OrdersBoardPage } from "./pages/OrdersBoardPage.
 import { BatchesPage } from "./pages/BatchesPage.jsx";
 import { DefectsPage } from "./pages/DefectsPage.jsx";
 import { AIChatPage } from "./pages/AIChatPage.jsx";
+import { PackingPage } from "./pages/PackingPage.jsx";
+import { DeliveryPage } from "./pages/DeliveryPage.jsx";
 
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════
@@ -1154,6 +1160,11 @@ export default function App(){
   const isOwner=role?.name==="owner";
   const isSuperAdmin=isAdmin||isOwner; // admin (roleId 1) and owner (roleId 4) see everything
   const isManagerLike=isSuperAdmin||isManager; // admin + owner + manager
+  const isManagerLikeRole=isManagerLike;
+  const isPacker=jobProfile==="packer";
+  const isCourier=jobProfile==="courier";
+  const isLepstitsa=jobProfile==="lepstitsa";
+  const navCtx={isPacker,isCourier,isLepstitsa,isWorker,isManagerLikeRole,isSuperAdmin};
 
   // ── Grouped Navigation ──
   const navGroups = [

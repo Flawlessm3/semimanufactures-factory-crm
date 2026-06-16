@@ -271,6 +271,7 @@ const CameraFeed = ({cam}) => {
 // Camera tile: feed + overlay label
 const CameraTile = ({cam, onFullscreen}) => {
   const isAvailable = cam.enabled;
+  const year = new Date().getFullYear();
   return (
     <div
       className="camera-card"
